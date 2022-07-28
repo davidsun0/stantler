@@ -1,12 +1,14 @@
-# ANTLR Compatible Parser Generator for Common Lisp
+# Stantler: ANTLR Compatible Parser Generator for Common Lisp
 
-ANTLR generates parser code from grammar descriptions.
-
-cl-antlr directly creates Lisp functions from ANTLR G4 files.
+Stantler is an ANTLR compatible lexer / parser generator for Common Lisp.
+It creates parser functions from ANTLR4 description files.
 
 ## Disclaimer
 
 I have no idea what I'm doing.
+
+Stantler is currently under development. It is neither fast nor feature complete.
+Contributions are welcome.
 
 ## Notes
 
