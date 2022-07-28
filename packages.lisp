@@ -1,0 +1,2 @@
+(defpackage #:stantler
+  (:use :cl))
