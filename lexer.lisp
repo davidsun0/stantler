@@ -1,11 +1,4 @@
-(defpackage #:stantler
-  (:use :cl))
 (in-package #:stantler)
-
-#|
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (ql:quickload '("cl-unicode")))
-|#
 
 (defclass input-stream ()
   ((content%
@@ -27,17 +20,24 @@
 (defun take (input-stream &optional (count 1))
   (incf (pointer input-stream) count))
 
-(defun restore (input-stream &optional (count 1))
-  (decf (pointer input-stream) count))
-
 (defun look-ahead (input-stream count)
   (aref (content input-stream)
 	(+ (pointer input-stream) count)))
 
-(defclass string-literal-rule ()
+(defmethod eof-p ((input input-stream))
+  (>= (pointer input) (length (content input))))
+
+(defclass literal-rule ()
   ((value%
     :reader value
     :initarg :value)))
+
+(defclass char-literal-rule (literal-rule) ())
+
+(defmethod match ((rule char-literal-rule) input)
+  ( (char= (value rule) (look-ahead input 0))
+
+(defclass string-literal-rule (literal-rule) ())
 
 (defmethod match ((rule string-literal-rule) input)
   (let ((needle (value rule)))
@@ -57,9 +57,26 @@
     :reader high
     :initarg :high)))
 
-(defmethod match ((rule char-ragne-rule) input)
+(defmethod match ((rule char-range-rule) input)
   (let ((head (aref (content input) (pointer input))))
     (if (char< (low rule) head (high rule))
 	(prog1 head
 	  (take input))
 	nil)))
+
+(defclass token ()
+  ((content%
+    :reader content
+    :initarg :content)
+   (name%
+    :reader name
+    :initarg :name)))
+
+(defclass named-rule (child-mixin) ())
+
+(defmethod match ((rule named-rule) input)
+  (match (child rule) input))
+
+(defun stringify (string-designators)
+  "Concatentates a list of string designators into a single string."
+  (apply #'concatenate 'string (mapcar #'string string-designators)))

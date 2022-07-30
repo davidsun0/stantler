@@ -1,15 +1,5 @@
 (in-package #:stantler)
 
-(defclass children-mixin ()
-  ((children%
-    :reader children
-    :initarg :children)))
-
-(defclass child-mixin ()
-  ((child%
-    :reader child
-    :initarg :child)))
-
 ;;; Special Rules
 
 (defclass wildcard-rule () ())
@@ -26,7 +16,17 @@
 
 ;;; Compound Rules
 
-(defclass or-rule (children-mixin)
+(defclass compound-rule () ())
+
+(defmethod match :around ((rule compound-rule) (input input-stream))
+  (let* ((pointer (pointer input))
+	 (match-results (call-next-method rule input)))
+    ;; Reset input to before match if matching fails
+    (unless match-results
+      (setf (pointer input) pointer))
+    match-results))
+
+(defclass or-rule (compound-rule children-mixin)
   ()
   (:documentation "Matches the first child rule from the left."))
 
@@ -34,11 +34,10 @@
   (loop for child in (children rule)
 	do (let ((token (match child input)))
 	     (when token
-	       (take input)
 	       (return token)))
 	finally (return nil)))
 
-(defclass and-rule (children-mixin)
+(defclass and-rule (compound-rule children-mixin)
   ()
   (:documentation "Matches if all children match consecutively, from left to right."))
 
@@ -46,14 +45,10 @@
   (let ((tokens '()))
     (loop for child in (children rule)
 	  do (let ((token (match child input)))
-	       (cond
-		 (token
-		  (take input)
-		  (push token tokens))
-		 (t
-		  (restore input (length tokens))
-		  (return nil))))
-	  finally (return nil))))
+	       (if token
+		   (push token tokens)
+		   (return nil)))
+	  finally (return tokens))))
 
 (defclass maybe-rule (child-mixin)
   ((default%
@@ -64,12 +59,9 @@
 
 (defmethod match ((rule maybe-rule) input)
   (let ((token (match (child rule) input)))
-    (cond
-      (token
-       (take input)
-       token)
-      (t
-       (default rule)))))
+    (if token
+	token
+	(default rule))))
 
 (defclass repeat-rule (child-mixin)
   ()
@@ -78,10 +70,10 @@
 (defmethod match ((rule repeat-rule) input)
   (loop with token = (match (child rule) input)
 	if token
-	  do (take input)
-	  and collect token into tokens
+	  collect token into tokens
 	else
-	  return tokens))
+	  ;; Repeat for zero times is still a sucessful match
+	  return (if tokens tokens t)))
 
 (defclass lazy-repeat-rule (repeat-rule)
   ((stop%
@@ -91,31 +83,10 @@
 
 (defmethod match ((rule lazy-repeat-rule) input)
   (let ((tokens '()))
-    (loop (let ((token (match (child rule) input)))
-	    (cond
-	      (token
-	       (take input)
-	       (push token tokens))
-	      (t
-	       (let ((stop (match (stop rule) input)))
-		 (cond
-		   (stop
-		    (take input)
-		    (push stop tokens)
-		    (return (nreverse tokens)))
-		   (t
-		    (restore (length tokens))
-		    (return nil))))))))))
-
-(defmethod match ((rule lazy-repeat-rule) input)
-  (let ((tokens '()))
     (loop (let ((stop (match (stop rule) input)))
 	    (when stop
 	      (return (nreverse (cons stop tokens)))))
 	  (let ((token (match (child rule) input)))
-	    (cond
-	      (token
-	       (push token tokens))
-	      (t
-	       (restore (length tokens))
-	       (return nil)))))))
+	    (if token
+		(push token tokens)
+		(return nil))))))
