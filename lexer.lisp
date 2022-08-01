@@ -1,13 +1,5 @@
 (in-package #:stantler)
 
-(defclass input-stream ()
-  ((content%
-    :reader content
-    :initarg :content)
-   (pointer%
-    :accessor pointer
-    :initarg :pointer)))
-
 (defun slurp-file (path)
   (with-open-file (stream path
 			  :direction :input
@@ -15,39 +7,50 @@
     (let ((chars (make-array (file-length stream)
 			      :element-type 'character)))
       (read-sequence chars stream)
-      (make-instance 'input-stream :content chars :pointer 0))))
+      chars)))
 
-(defun take (input-stream &optional (count 1))
-  (incf (pointer input-stream) count))
+(defgeneric match (input rule start)
+  (:documentation "Matches `rule` on `input` at index `start`.
+Returns the number of items matched or NIL if the rule fails to match.
+Rules that sucessfully match no items return 0."))
 
-(defun look-ahead (input-stream count)
-  (aref (content input-stream)
-	(+ (pointer input-stream) count)))
+(define-condition eof-error (error)
+  ((index%
+    :reader index
+    :initarg :index)))
 
-(defmethod eof-p ((input input-stream))
-  (>= (pointer input) (length (content input))))
+(defun look-ahead (input start &optional (count 0))
+  (let ((index (+ start count)))
+    (if (> index (array-total-size input))
+	(error 'eof-error :index index)
+	(aref input index))))
 
 (defclass literal-rule ()
   ((value%
     :reader value
-    :initarg :value)))
+    :initarg :value)
+   (comparison%
+    :reader comparison
+    :initarg :comparison))
+  (:documentation "Matches a literal or array of literals against the input."))
 
-(defclass char-literal-rule (literal-rule) ())
+(defclass object-literal-rule (literal-rule) ())
 
-(defmethod match ((rule char-literal-rule) input)
-  ( (char= (value rule) (look-ahead input 0))
+(defmethod match (input (rule object-literal-rule) (start integer))
+  (if (funcall (comparison rule) (value rule) (look-ahead input start))
+      1
+      nil))
 
-(defclass string-literal-rule (literal-rule) ())
+(defclass array-literal-rule (literal-rule) ())
 
-(defmethod match ((rule string-literal-rule) input)
-  (let ((needle (value rule)))
-    (cond
-      ((string= needle (content input)
-		:start2 (pointer input)
-		:end2 (+ (pointer input) (length needle)))
-       (take input (length needle))
-       needle)
-      (t nil))))
+(defmethod match (input (rule array-literal-rule) (start integer))
+  (loop for needle across (value rule)
+	    for offset from 0
+	    unless (funcall (comparison rule)
+			    needle
+			    (look-ahead input start offset))
+	      return nil
+	    finally (return (length (value rule)))))
 
 (defclass char-range-rule ()
   ((low%
@@ -57,12 +60,10 @@
     :reader high
     :initarg :high)))
 
-(defmethod match ((rule char-range-rule) input)
-  (let ((head (aref (content input) (pointer input))))
-    (if (char< (low rule) head (high rule))
-	(prog1 head
-	  (take input))
-	nil)))
+(defmethod match (input (rule char-range-rule) (start integer))
+  (if (char< (low rule) (look-ahead input start) (high rule))
+      1
+      nil))
 
 (defclass token ()
   ((content%
@@ -74,9 +75,8 @@
 
 (defclass named-rule (child-mixin) ())
 
-(defmethod match ((rule named-rule) input)
-  (match (child rule) input))
-
-(defun stringify (string-designators)
-  "Concatentates a list of string designators into a single string."
-  (apply #'concatenate 'string (mapcar #'string string-designators)))
+(defmethod match (input (rule named-rule) start)
+  (let ((count (match input (child rule) start)))
+    (make-instance 'token
+		   :name (name rule)
+		   :content (cons start count))))
