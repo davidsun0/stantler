@@ -44,7 +44,16 @@
 		   (return nil)))
 	  finally (return total))))
 
-(defclass maybe-rule (child-mixin)
+(defclass not-rule (compound-rule child-mixin)
+  ()
+  (:documentation "Matches if the child rule doesn't match."))
+
+(defmethod match (input (rule not-rule) start)
+  (if (match input (child rule) start)
+      nil
+      0))
+
+(defclass maybe-rule (compound-rule child-mixin)
   ()
   (:documentation "Matches the child rule or nothing."))
 

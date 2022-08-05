@@ -6,6 +6,6 @@
   :description "ANTLR4-compatible parser generator."
   :components
   ((:file "packages")
-   (:file "lexer" :depends-on ("packages"))
-   (:file "compound-rules" :depends-on ("packages"))
-   (:file "bootstrap-lexer" :depends-on ("lexer" "compound-rules"))))
+   (:file "utils" :depends-on ("packages"))
+   (:file "lexer" :depends-on ("packages" "utils"))
+   (:file "compound-rules" :depends-on ("packages" "utils"))))
