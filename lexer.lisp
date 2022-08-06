@@ -21,9 +21,14 @@ Rules that sucessfully match no items return 0."))
 
 (defun look-ahead (input start &optional (count 0))
   (let ((index (+ start count)))
-    (if (> index (array-total-size input))
+    (if (>= index (array-total-size input))
 	(error 'eof-error :index index)
 	(aref input index))))
+
+(defmacro with-no-eof-match (&body body)
+  `(handler-case (progn ,@body)
+     (eof-error ()
+       nil)))
 
 (defclass literal-rule ()
   ((value%
@@ -37,20 +42,24 @@ Rules that sucessfully match no items return 0."))
 (defclass object-literal-rule (literal-rule) ())
 
 (defmethod match (input (rule object-literal-rule) (start integer))
-  (if (funcall (comparison rule) (value rule) (look-ahead input start))
-      1
-      nil))
+  (with-no-eof-match
+    (if (funcall (comparison rule)
+		 (value rule)
+		 (look-ahead input start))
+	1
+	nil)))
 
 (defclass array-literal-rule (literal-rule) ())
 
 (defmethod match (input (rule array-literal-rule) (start integer))
-  (loop for needle across (value rule)
-	    for offset from 0
-	    unless (funcall (comparison rule)
-			    needle
-			    (look-ahead input start offset))
-	      return nil
-	    finally (return (length (value rule)))))
+  (with-no-eof-match
+    (loop for needle across (value rule)
+	  for offset from 0
+	  unless (funcall (comparison rule)
+			  needle
+			  (look-ahead input start offset))
+	    return nil
+	  finally (return (length (value rule))))))
 
 (defclass char-range-rule ()
   ((low%
@@ -61,9 +70,12 @@ Rules that sucessfully match no items return 0."))
     :initarg :high)))
 
 (defmethod match (input (rule char-range-rule) (start integer))
-  (if (char< (low rule) (look-ahead input start) (high rule))
-      1
-      nil))
+  (with-no-eof-match
+    (if (char<= (low rule)
+		(look-ahead input start)
+		(high rule))
+	1
+	nil)))
 
 (defclass token ()
   ((content%
@@ -73,10 +85,10 @@ Rules that sucessfully match no items return 0."))
     :reader name
     :initarg :name)))
 
-(defclass named-rule (child-mixin) ())
+(defclass named-rule (child-mixin)
+  ((name%
+    :reader name
+    :initarg :name)))
 
 (defmethod match (input (rule named-rule) start)
-  (let ((count (match input (child rule) start)))
-    (make-instance 'token
-		   :name (name rule)
-		   :content (cons start count))))
+  (match input (child rule) start))
