@@ -14,32 +14,31 @@
 
 (defmethod match (input (lexer lexer) start)
   (loop for rule across (rules lexer)
-	do (let ((m (match input rule start)))
-	     (when m (return m)))
+	do (let ((match (match input rule start)))
+	     (when match (return match)))
 	finally (return nil)))
 
 (defun lex (input lexer start)
   (flet ((lex-once (index)
-	   (print index)
 	   (loop for rule across (rules lexer)
 		 do (let ((m (match input rule index)))
-		      (when m (return m)))
-		 finally (return nil))))
-    (let ((count 0))
-      (loop while (lex-once (+ start count))
-	      do (incf count it)
-    ))))
-
-(let ((count 0))
-      (loop with match = (lex-once (+ start count))
-	    when match
-	      ;; collect (cons (+ start count) match) into tokens
-	    ;; and
-	      do (incf count match)
-		     (print (+ start count))
-		     (print match)
+		      (when m (return (values m rule))))
+		 finally (return nil)))
+	 (make-token (offset length)
+	   (make-array length
+		       :element-type (array-element-type input)
+		       :displaced-to input
+		       :displaced-index-offset offset)))
+    (let ((count 0)
+	  (match)
+	  (rule))
+      (loop do (setf (values match rule)
+		     (lex-once (+ start count)))
+	    if match
+	      collect (cons rule (make-token (+ start count) match)) into tokens
+	      and do (incf count match)
 	    else
-	      return nil))
+	      return (values tokens (+ start count))))))
 
 (defparameter *bootstrap-lexer*
   (make-instance 'lexer))
@@ -59,14 +58,19 @@
 	   (make-instance 'or-rule :children rules))
 	 (lazy-repeat (child stop)
 	   (make-instance 'lazy-repeat-rule :child child :stop stop))
+	 (eager-repeat (child)
+	   (make-instance 'repeat-rule :child child))
 	 (repeat (child)
 	   (make-instance 'repeat-rule :child child))
 	 (lexer-rule (name rule)
-	   (declare (ignore name))
-	   (vector-push-extend rule (rules *bootstrap-lexer*)))
+	   (let ((named-rule (make-instance 'named-rule
+					    :child rule
+					    :name name)))
+	     (vector-push-extend named-rule (rules *bootstrap-lexer*))))
 	 (not-rule (child)
 	   (make-instance 'not-rule :child child)))
 
+    (setf *bootstrap-lexer* (make-instance 'lexer))
     (lexer-rule "DOC_COMMENT"
 	(and-rule (literal "/**") (lazy-repeat wildcard (literal "*/"))))
     (lexer-rule "BLOCK_COMMENT"
@@ -79,6 +83,7 @@
     (lexer-rule "INT"
 	(or-rule (literal #\0)
 		 (and-rule (range #\1 #\9) (repeat (range #\0 #\9)))))
+
     (lexer-rule "STRING_LITERAL"
 	(and-rule (literal #\')
 		  (repeat (or-rule (and-rule (literal #\\)
@@ -97,6 +102,16 @@
 					      (literal +newline+)
 					      (literal #\\)))))
 		  (literal #\')))
+
+    ;; Taking shortcuts to avoid language actions
+    (lexer-rule "LEXER_CHAR_SET"
+		(and-rule (literal #\[)
+			  (repeat
+			  (or-rule (and-rule (literal #\\) wildcard)
+				   (not-rule (or-rule
+					      (literal #\])
+					      (literal #\\)))))
+			  (literal #\])))
 
     (let ((string-tokens
 	    (list
@@ -142,18 +157,20 @@
     (lexer-rule "POUND" (literal #\#))
     (lexer-rule "NOT" (literal #\~))
 
-    (lexer-rule "WS"
-      (and-rule (or-rule
-		 (literal #\Space)
-		 (literal #\Tab)
-		 (literal +return+)
-		 (literal +newline+)
-		 (literal #\Page))
-		(repeat (or-rule
-			 (literal #\Space)
-			 (literal #\Tab)
-			 (literal +return+)
-			 (literal +newline+)
-			 (literal #\Page)))))
+    (lexer-rule "ID"
+      (and-rule (or-rule (range #\A #\Z) (range #\a #\z))
+		(eager-repeat (or-rule (range #\A #\Z)
+				       (range #\a #\z)
+				       (range #\0 #\9)
+				       (literal #\_)))))
+
+    (let ((white-space (or-rule
+			(literal #\Space)
+			(literal #\Tab)
+			(literal +return+)
+			(literal +newline+)
+			(literal #\Page))))
+      (lexer-rule "WS"
+        (and-rule white-space (repeat white-space))))
 
     )) ; end let
