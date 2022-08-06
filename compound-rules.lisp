@@ -51,7 +51,7 @@
 (defmethod match (input (rule not-rule) start)
   (if (match input (child rule) start)
       nil
-      0))
+      1))
 
 (defclass maybe-rule (compound-rule child-mixin)
   ()
