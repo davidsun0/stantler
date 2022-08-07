@@ -7,39 +7,6 @@
 
 (in-package #:stantler)
 
-(defclass lexer ()
-  ((rules%
-    :accessor rules
-    :initform (make-array 16 :adjustable t :fill-pointer 0))))
-
-(defmethod match (input (lexer lexer) start)
-  (loop for rule across (rules lexer)
-	do (let ((match (match input rule start)))
-	     (when match (return match)))
-	finally (return nil)))
-
-(defun lex (input lexer start)
-  (flet ((lex-once (index)
-	   (loop for rule across (rules lexer)
-		 do (let ((m (match input rule index)))
-		      (when m (return (values m rule))))
-		 finally (return nil)))
-	 (make-token (offset length)
-	   (make-array length
-		       :element-type (array-element-type input)
-		       :displaced-to input
-		       :displaced-index-offset offset)))
-    (let ((count 0)
-	  (match)
-	  (rule))
-      (loop do (setf (values match rule)
-		     (lex-once (+ start count)))
-	    if match
-	      collect (cons rule (make-token (+ start count) match)) into tokens
-	      and do (incf count match)
-	    else
-	      return (values tokens (+ start count))))))
-
 (defparameter *bootstrap-lexer*
   (make-instance 'lexer))
 
@@ -112,6 +79,19 @@
 					      (literal #\])
 					      (literal #\\)))))
 			  (literal #\])))
+
+    (let ((wsnl-chars (repeat (or-rule
+			       (literal #\Space)
+			       (literal #\Tab)
+			       (literal #\Page)
+			       (literal +return+)
+			       (literal +newline+)))))
+      (lexer-rule "OPTIONS"
+		  (and-rule (literal "options") wsnl-chars (literal #\{)))
+      (lexer-rule "TOKENS"
+		  (and-rule (literal "tokens") wsnl-chars (literal #\{)))
+      (lexer-rule "CHANNELS"
+		  (and-rule (literal "channels") wsnl-chars (literal #\{))))
 
     (let ((string-tokens
 	    (list

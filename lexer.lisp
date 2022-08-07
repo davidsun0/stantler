@@ -92,3 +92,33 @@ Rules that sucessfully match no items return 0."))
 
 (defmethod match (input (rule named-rule) start)
   (match input (child rule) start))
+
+(defclass lexer ()
+  ((rules%
+    :accessor rules
+    :initform (make-array 16 :adjustable t :fill-pointer 0))))
+
+(defmethod match (input (lexer lexer) start)
+  "Matches first applicable rule in `lexer`."
+  (loop for rule across (rules lexer)
+	with match = (match input rule start)
+	when match
+	  return match
+	finally (return nil)))
+
+(defun tokenize (input lexer start)
+  (loop for rule across (rules lexer)
+	for match = (match input rule start)
+	when match
+	  return (make-instance 'token
+				:content (cons start match)
+				:name rule)
+	finally (return nil)))
+
+(defun lex (input lexer start)
+  (loop for token = (tokenize input lexer start)
+	if token
+	  collect token into tokens
+	  and do (incf start (cdr (content token)))
+	else
+	  return (values tokens start)))
