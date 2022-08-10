@@ -17,3 +17,9 @@
 
 (defconstant +newline+ (code-char #xD)
   "Newline character")
+
+(define-condition eof-error (error)
+  ((index%
+    :reader index
+    :initarg :index))
+  (:documentation "Error for reading past the end of a character or token stream."))

@@ -1,6 +1,55 @@
 (in-package #:stantler)
 
-;;; Special Rules
+;;; General Rules =====================================================
+
+(defmacro with-no-eof-match (&body body)
+  `(handler-case (progn ,@body)
+     (eof-error ()
+       nil)))
+
+(defclass literal-rule ()
+  ((value%
+    :reader value
+    :initarg :value)
+   (comparison%
+    :reader comparison
+    :initarg :comparison)))
+
+(defclass object-literal-rule (literal-rule)
+  ()
+  (:documentation "Matches a single object literal."))
+
+(defmethod match (input (rule object-literal-rule) start)
+  (with-no-eof-match
+    (if (funcall (comparison rule)
+		 (value rule)
+		 (look-ahead input start))
+	1
+	nil)))
+
+(defclass array-literal-rule (literal-rule)
+  ()
+  (:documentation "Matches an array of literals."))
+
+(defmethod match (input (rule array-literal-rule) start)
+  (with-no-eof-match
+    (loop for needle across (value rule)
+	  for offset from 0
+	  unless (funcall (comparison rule)
+			  needle
+			  (look-ahead input start offset))
+	    return nil
+	  finally (return (length (value rule))))))
+
+(defclass named-rule (child-mixin)
+  ((name%
+    :reader name
+    :initarg :name)))
+
+(defmethod match (input (rule named-rule) start)
+  (match input (child rule) start))
+
+;;; Special Rules =====================================================
 
 (defclass wildcard-rule () ())
 
@@ -16,13 +65,11 @@
       0
       nil))
 
-;;; Compound Rules
+;;; Compound Rules ====================================================
 
-(defclass compound-rule () ())
-
-(defclass or-rule (compound-rule children-mixin)
+(defclass or-rule (children-mixin)
   ()
-  (:documentation "Matches the first child rule from the left."))
+  (:documentation "Matches the first applicable child rule."))
 
 (defmethod match (input (rule or-rule) start)
   (loop for child in (children rule)
@@ -31,7 +78,7 @@
 	       (return count)))
 	finally (return nil)))
 
-(defclass and-rule (compound-rule children-mixin)
+(defclass and-rule (children-mixin)
   ()
   (:documentation "Matches if all children match consecutively, from left to right."))
 
@@ -44,7 +91,7 @@
 		   (return nil)))
 	  finally (return total))))
 
-(defclass not-rule (compound-rule child-mixin)
+(defclass not-rule (child-mixin)
   ()
   (:documentation "Matches if the child rule doesn't match."))
 
@@ -53,7 +100,7 @@
       nil
       1))
 
-(defclass maybe-rule (compound-rule child-mixin)
+(defclass maybe-rule (child-mixin)
   ()
   (:documentation "Matches the child rule or nothing."))
 
@@ -63,7 +110,7 @@
 	token
 	0)))
 
-(defclass repeat-rule (compound-rule child-mixin)
+(defclass repeat-rule (child-mixin)
   ()
   (:documentation "Matches the child multiple times."))
 

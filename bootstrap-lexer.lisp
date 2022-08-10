@@ -14,9 +14,9 @@
   (flet ((literal (literal)
 	   (cond
 	     ((characterp literal)
-	      (make-instance 'object-literal-rule :comparison 'char= :value literal))
+	      (char-rule literal))
 	     ((stringp literal)
-	      (make-instance 'array-literal-rule :comparison 'char= :value literal))))
+	      (string-rule literal))))
 	 (range (low high)
 	   (make-instance 'char-range-rule :low low :high high))
 	 (and-rule (&rest rules)
@@ -39,45 +39,45 @@
 
     (setf *bootstrap-lexer* (make-instance 'lexer))
     (lexer-rule "DOC_COMMENT"
-	(and-rule (literal "/**") (lazy-repeat wildcard (literal "*/"))))
+		(and-rule (literal "/**") (lazy-repeat wildcard (literal "*/"))))
     (lexer-rule "BLOCK_COMMENT"
-	(and-rule (literal "/*") (lazy-repeat wildcard (literal "*/"))))
+		(and-rule (literal "/*") (lazy-repeat wildcard (literal "*/"))))
     (lexer-rule "LINE_COMMENT"
-	(and-rule (literal "//")
-		  (lazy-repeat wildcard
-			       (or-rule (literal +return+)
-					(literal +newline+)))))
+		(and-rule (literal "//")
+			  (lazy-repeat wildcard
+				       (or-rule (literal +return+)
+						(literal +newline+)))))
     (lexer-rule "INT"
-	(or-rule (literal #\0)
-		 (and-rule (range #\1 #\9) (repeat (range #\0 #\9)))))
+		(or-rule (literal #\0)
+			 (and-rule (range #\1 #\9) (repeat (range #\0 #\9)))))
 
     (lexer-rule "STRING_LITERAL"
-	(and-rule (literal #\')
-		  (repeat (or-rule (and-rule (literal #\\)
-					     (or
-					      (literal #\b)
-					      (literal #\t)
-					      (literal #\n)
-					      (literal #\f)
-					      (literal #\r)
-					      (literal #\")
-					      (literal #\')
-					      (literal #\\)))
-				   (not-rule (or
-					      (literal #\')
-					      (literal +return+)
-					      (literal +newline+)
-					      (literal #\\)))))
-		  (literal #\')))
+		(and-rule (literal #\')
+			  (repeat (or-rule (and-rule (literal #\\)
+						     (or
+						      (literal #\b)
+						      (literal #\t)
+						      (literal #\n)
+						      (literal #\f)
+						      (literal #\r)
+						      (literal #\")
+						      (literal #\')
+						      (literal #\\)))
+					   (not-rule (or
+						      (literal #\')
+						      (literal +return+)
+						      (literal +newline+)
+						      (literal #\\)))))
+			  (literal #\')))
 
     ;; Taking shortcuts to avoid language actions
     (lexer-rule "LEXER_CHAR_SET"
 		(and-rule (literal #\[)
 			  (repeat
-			  (or-rule (and-rule (literal #\\) wildcard)
-				   (not-rule (or-rule
-					      (literal #\])
-					      (literal #\\)))))
+			   (or-rule (and-rule (literal #\\) wildcard)
+				    (not-rule (or-rule
+					       (literal #\])
+					       (literal #\\)))))
 			  (literal #\])))
 
     (let ((wsnl-chars (repeat (or-rule
@@ -111,7 +111,7 @@
 	     "mode")))
       (loop for st in string-tokens
 	    do (lexer-rule (string-upcase st)
-		   (literal (string-downcase st)))))
+			   (literal (string-downcase st)))))
 
     (lexer-rule "COLONCOLON" (literal "::"))
     (lexer-rule "COLON" (literal #\:))
@@ -138,11 +138,11 @@
     (lexer-rule "NOT" (literal #\~))
 
     (lexer-rule "ID"
-      (and-rule (or-rule (range #\A #\Z) (range #\a #\z))
-		(eager-repeat (or-rule (range #\A #\Z)
-				       (range #\a #\z)
-				       (range #\0 #\9)
-				       (literal #\_)))))
+		(and-rule (or-rule (range #\A #\Z) (range #\a #\z))
+			  (eager-repeat (or-rule (range #\A #\Z)
+						 (range #\a #\z)
+						 (range #\0 #\9)
+						 (literal #\_)))))
 
     (let ((white-space (or-rule
 			(literal #\Space)
@@ -151,6 +151,6 @@
 			(literal +newline+)
 			(literal #\Page))))
       (lexer-rule "WS"
-        (and-rule white-space (repeat white-space))))
+		  (and-rule white-space (repeat white-space))))
 
     )) ; end let

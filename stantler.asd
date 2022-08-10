@@ -8,4 +8,4 @@
   ((:file "packages")
    (:file "utils" :depends-on ("packages"))
    (:file "lexer" :depends-on ("packages" "utils"))
-   (:file "compound-rules" :depends-on ("packages" "utils"))))
+   (:file "matcher-rules" :depends-on ("packages" "utils"))))
