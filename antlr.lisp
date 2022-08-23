@@ -1,13 +1,10 @@
-;;; Bootstrap Lexer
-;;; Used for lexing ANTLR in ANTLR
-;;; No
-;;; - Unicode
-;;; - Recursive Rules, Fragments
-;;; - Lexer actions, Modes, Channels
+#|
+ANTLR4 Lexer / Parser
+|#
 
 (in-package #:stantler)
 
-(defparameter *bootstrap-lexer*
+(defparameter *antlr-lexer*
   (make-instance 'lexer))
 
 (let ((wildcard (make-instance 'wildcard-rule)))
@@ -29,15 +26,14 @@
 	   (make-instance 'repeat-rule :child child))
 	 (repeat (child)
 	   (make-instance 'repeat-rule :child child))
-	 (lexer-rule (name rule)
-	   (let ((named-rule (make-instance 'named-rule
-					    :child rule
-					    :name name)))
-	     (vector-push-extend named-rule (rules *bootstrap-lexer*))))
 	 (not-rule (child)
-	   (make-instance 'not-rule :child child)))
+	   (make-instance 'not-rule :child child))
+	 (lexer-rule (name rule &rest args &key (mode :default) &allow-other-keys)
+	   (vector-push-extend
+	    (apply 'make-instance 'lexer-rule :child rule :name name args)
+	    (mode-rules *antlr-lexer* mode))))
 
-    (setf *bootstrap-lexer* (make-instance 'lexer))
+    (setf *antlr-lexer* (make-instance 'lexer))
     (lexer-rule "DOC_COMMENT"
 		(and-rule (literal "/**") (lazy-repeat wildcard (literal "*/"))))
     (lexer-rule "BLOCK_COMMENT"
@@ -154,3 +150,4 @@
 		  (and-rule white-space (repeat white-space))))
 
     )) ; end let
+

@@ -1,5 +1,10 @@
 (in-package #:stantler)
 
+(defgeneric match (input rule start)
+  (:documentation "Matches `rule` on `input` at index `start`.
+Returns the number of items matched or NIL if the rule fails to match.
+Rules that sucessfully match no items return 0."))
+
 ;;; General Rules =====================================================
 
 (defmacro with-no-eof-match (&body body)
@@ -40,14 +45,6 @@
 			  (look-ahead input start offset))
 	    return nil
 	  finally (return (length (value rule))))))
-
-(defclass named-rule (child-mixin)
-  ((name%
-    :reader name
-    :initarg :name)))
-
-(defmethod match (input (rule named-rule) start)
-  (match input (child rule) start))
 
 ;;; Special Rules =====================================================
 
