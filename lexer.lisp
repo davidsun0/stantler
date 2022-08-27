@@ -78,8 +78,11 @@
 
 (defclass token ()
   ((content%
-    :reader content
+    :accessor content
     :initarg :content)
+   (offset%
+    :accessor offset
+    :initarg :offset)
    (rule%
     :reader rule
     :initarg :rule)
@@ -87,6 +90,14 @@
     :reader channel
     :initarg :channel
     :initform :default)))
+
+(defmethod print-object ((token token) stream)
+  (print-unreadable-object (token stream :type t :identity nil)
+    ;; If the top-level rule's child is a literal, just print the name.
+    ;; Otherwise, print the rule name and the matched content.
+    (if (typep (child (rule token)) 'literal-rule)
+	(format stream "~A" (name (rule token)))
+	(format stream "~A ~S" (name (rule token)) (content token)))))
 
 (defclass lexer-rule (child-mixin)
   ((name%
@@ -117,21 +128,35 @@
 (defmethod match (input (rule lexer-rule) start)
   (match input (child rule) start))
 
-(defun lex% (input lexer token-start)
+(defun construct-token (rule channel input offset length)
+  (make-instance
+   'token
+   :rule rule
+   :channel channel
+   :offset (cons offset length)
+   :content (make-array
+	     length
+	     :element-type (array-element-type input)
+	     :displaced-index-offset offset
+	     :displaced-to input)))
+
+(defun next-token (input lexer token-start)
+  "Lexes the next token from the input at the offset `token-start`."
   (let ((length 0)
 	(rule-start token-start)
 	rule
-	match
-	type
-	channel)
+	match)
     (tagbody
      loop
+       ;; Search for an applicable rule
        (loop for rule* across (mode-rules lexer (mode lexer)) 
 	     for match* = (match input rule* rule-start)
 	     when match*
 	       return (setf rule rule* match match*)
-	     finally (return-from lex% nil))
-       ;; Can't be bothered to write a tail call macro
+	     ;; Return if no rules match
+	     finally (return-from next-token nil))
+       ;; Match may trigger additional rules
+       ;; Tail recurse to the next rule for `skip' and `more'
        (when (skip-p rule)
 	 (incf rule-start match)
 	 (setf token-start rule-start)
@@ -141,19 +166,18 @@
 	 (incf rule-start match)
 	 (setf length match)
 	 (go loop))
-       (setf type (or (token-type rule) rule))
-       (setf channel (or (channel rule) :default))
        (setf (mode lexer) (or (lexer-mode rule) :default)))
-    (make-instance 'token
-		   :rule type
-		   :channel channel
-		   :content (cons token-start (+ match length)))))
+    (construct-token
+     (or (token-type rule) rule)
+     (or (channel rule) :default)
+     input
+     token-start
+     (+ length match))))
 
 (defun lex (input lexer start)
-  (loop for token = (lex% input lexer start)
-	do (print token)
+  (loop for token = (next-token input lexer start)
 	when token
 	  collect token into tokens
-	  and do (incf start (cdr (content token)))
+	  and do (incf start (cdr (offset token)))
 	else
 	  return (values tokens start)))
