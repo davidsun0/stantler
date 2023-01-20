@@ -5,12 +5,7 @@
 Returns the number of items matched or NIL if the rule fails to match.
 Rules that sucessfully match no items return 0."))
 
-;;; General Rules =====================================================
-
-(defmacro with-no-eof-match (&body body)
-  `(handler-case (progn ,@body)
-     (eof-error ()
-       nil)))
+;;; Literal Rules =====================================================
 
 (defclass literal-rule ()
   ((value%
@@ -34,7 +29,7 @@ Rules that sucessfully match no items return 0."))
 
 (defclass array-literal-rule (literal-rule)
   ()
-  (:documentation "Matches an array of literals."))
+  (:documentation "Matches an array of literals in sequence."))
 
 (defmethod match (input (rule array-literal-rule) start)
   (with-no-eof-match
@@ -48,14 +43,19 @@ Rules that sucessfully match no items return 0."))
 
 ;;; Special Rules =====================================================
 
-(defclass wildcard-rule () ())
+;; Ideally the wildcard-rule should be a singleton
+(defclass wildcard-rule ()
+  ()
+  (:documentation "Matches any one object."))
 
 (defmethod match (input (rule wildcard-rule) start)
   (if (look-ahead input start)
       1
       nil))
 
-(defclass eof-rule () ())
+(defclass eof-rule ()
+  ()
+  (:documentation "Matches the end of the input."))
 
 (defmethod match ((input array) (rule eof-rule) (start integer))
   (if (> start (array-total-size input))
@@ -70,9 +70,9 @@ Rules that sucessfully match no items return 0."))
 
 (defmethod match (input (rule or-rule) start)
   (loop for child in (children rule)
-	do (let ((count (match input child start)))
-	     (when count
-	       (return count)))
+	for count = (match input child start)
+	when count
+	  return count
 	finally (return nil)))
 
 (defclass and-rule (children-mixin)
@@ -80,13 +80,14 @@ Rules that sucessfully match no items return 0."))
   (:documentation "Matches if all children match consecutively, from left to right."))
 
 (defmethod match (input (rule and-rule) start)
-  (let ((total 0))
-    (loop for child in (children rule)
-	  do (let ((count (match input child (+ start total))))
-	       (if count
-		   (incf total count)
-		   (return nil)))
-	  finally (return total))))
+  (loop with total = 0
+	for child in (children rule)
+	for count = (match input child (+ start total))
+	if count
+	  do (incf total count)
+	else
+	  return nil
+	finally (return total)))
 
 (defclass not-rule (child-mixin)
   ()
@@ -103,34 +104,37 @@ Rules that sucessfully match no items return 0."))
 
 (defmethod match (input (rule maybe-rule) start)
   (let ((count (match input (child rule) start)))
-    (if token
-	token
-	0)))
+    (if count
+	count
+	nil)))
 
 (defclass repeat-rule (child-mixin)
   ()
   (:documentation "Matches the child multiple times."))
 
 (defmethod match (input (rule repeat-rule) start)
-  (let ((total 0))
-    (loop (let ((count (match input (child rule) (+ start total))))
-	    (if count
-		(incf total count)
-		;; Return zero when matched zero times
-		(return total))))))
+  (loop with total = 0
+	for count = (match input (child rule) (+ start total))
+	if count
+	  do (incf total count)
+	else
+	  ;; Returns zero when child repeats zero times
+	  return total))
 
 (defclass lazy-repeat-rule (repeat-rule)
   ((stop%
     :reader stop
     :initarg :stop))
-  (:documentation "Matches child rule repeatedly until the stop rule matches."))
+  (:documentation "Matches the child rule the fewest number of times before the stop rule matches."))
 
 (defmethod match (input (rule lazy-repeat-rule) start)
-  (let ((total 0))
-    (loop (let ((stop (match input (stop rule) (+ start total))))
-	    (when stop
-	      (return (+ total stop))))
-	  (let ((count (match input (child rule) (+ start total))))
-	    (if count
-		(incf total count)
-		(return nil))))))
+  (with-accessors ((child child) (stop stop)) rule
+    (loop with total = 0
+	  ;; Stop rule
+	  for count = (match input stop (+ start total))
+	  when count
+	    return (+ total count)
+	  ;; Child rule
+	  do (setf count (match input child (+ start total)))
+	     (when count
+	       (incf total count)))))

@@ -7,6 +7,9 @@ ANTLR4 Lexer / Parser
 (defparameter *antlr-lexer*
   (make-instance 'lexer))
 
+(defparameter *antlr-parser*
+  (make-instance 'parser))
+
 (let ((wildcard (make-instance 'wildcard-rule)))
   (flet ((literal (literal)
 	   (cond
@@ -35,14 +38,18 @@ ANTLR4 Lexer / Parser
 
     (setf *antlr-lexer* (make-instance 'lexer))
     (lexer-rule "DOC_COMMENT"
-		(and-rule (literal "/**") (lazy-repeat wildcard (literal "*/"))))
+		(and-rule (literal "/**") (lazy-repeat wildcard (literal "*/")))
+		:channel "COMMENT")
     (lexer-rule "BLOCK_COMMENT"
-		(and-rule (literal "/*") (lazy-repeat wildcard (literal "*/"))))
+		(and-rule (literal "/*") (lazy-repeat wildcard (literal "*/")))
+		:channel "COMMENT")
     (lexer-rule "LINE_COMMENT"
 		(and-rule (literal "//")
 			  (lazy-repeat wildcard
 				       (or-rule (literal +return+)
-						(literal +newline+)))))
+						(literal +newline+))))
+		:channel "COMMENT")
+
     (lexer-rule "INT"
 		(or-rule (literal #\0)
 			 (and-rule (range #\1 #\9) (repeat (range #\0 #\9)))))
@@ -147,7 +154,34 @@ ANTLR4 Lexer / Parser
 			(literal +newline+)
 			(literal #\Page))))
       (lexer-rule "WS"
-		  (and-rule white-space (repeat white-space))))
+		  (and-rule white-space (repeat white-space))
+		  :channel "OFF_CHANNEL"))
 
     )) ; end let
 
+(defun find-rule (name lexer)
+  (loop for mode in (modes lexer)
+	do (loop for rule across (rules mode)
+		 when (string= name (name rule))
+		   do (return-from find-rule rule))))
+
+(defun collect-rules (tokens)
+  (let ((semi (find-rule "SEMI" *antlr-lexer*)))
+    (loop with current = '()
+	  for token in tokens
+	  if (eq (rule token) semi)
+	    collect (nreverse current) into rules
+	    and do (setf current '())
+	  else
+	    do (push token current)
+	  finally (return rules))))
+
+(let* ((parser-text (slurp-file (asdf:system-relative-pathname
+				 'stantler
+				 "ANTLRv4Parser.g4")))
+       (tokens (lex parser-text *antlr-lexer* 0))
+       ;; Only keep default channel tokens
+       (tokens* (remove-if (lambda (x) (not (eq :default x)))
+			   tokens
+			   :key 'channel)))
+  (collect-rules (nthcdr 10 tokens*)))

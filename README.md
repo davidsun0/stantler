@@ -10,6 +10,12 @@ Contributions are welcome.
 
 I have no idea what I'm doing.
 
+## Documentation
+
+Use read macros in language actions at your own risk.
+As a result of ANTLR's match longest semantics, Lisp code may be read any number
+of times.
+
 ## Notes
 
 https://github.com/antlr/antlr4/blob/master/doc/lexer-rules.md
