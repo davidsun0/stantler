@@ -5,6 +5,11 @@
 Returns the number of items matched or NIL if the rule fails to match.
 Rules that sucessfully match no items return 0."))
 
+;;; 'NIL represents the no-match rule. It never matches anything.
+;;; Useful as a default or dummy rule.
+(defmethod match (input (rule null) start)
+  nil)
+
 ;;; Literal Rules =====================================================
 
 (defclass literal-rule ()
@@ -13,20 +18,24 @@ Rules that sucessfully match no items return 0."))
     :initarg :value)
    (comparison%
     :reader comparison
-    :initarg :comparison)))
+    :initarg :comparison)
+   (key%
+    :reader key
+    :initform 'identity
+    :initarg :key)))
 
 (defclass object-literal-rule (literal-rule)
   ()
   (:documentation "Matches a single object literal."))
 
 (defmethod match (input (rule object-literal-rule) start)
-  (with-no-eof-match
-    (if (funcall (comparison rule)
-		 (value rule)
-		 (look-ahead input start))
-	1
-	nil)))
+  (with-accessors ((comparison comparison) (value value) (key key)) rule
+    (with-no-eof-match
+      (if (funcall comparison value (funcall key (look-ahead input start)))
+	  1
+	  nil))))
 
+;; TODO: funcall key w/ array-literal-rule
 (defclass array-literal-rule (literal-rule)
   ()
   (:documentation "Matches an array of literals in sequence."))

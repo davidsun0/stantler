@@ -84,10 +84,12 @@
     :reader skip-p
     :initarg :skip-p
     :initform nil)
+   ;; True when a rule continues to consume input
    (more-p%
     :reader more-p
     :initarg :more-p
     :initform nil)
+   ;; Is token-type necessary? It references the rule that created the token (i.e. this object)
    (token-type%
     :reader token-type
     :initarg :token-type
@@ -114,8 +116,9 @@
    (offset%
     :accessor offset
     :initarg :offset)
+   ;; Rule may be overwritten by lexer (why, ANTLR!?)
    (rule%
-    :reader rule
+    :accessor rule
     :initarg :rule)
    (channel%
     :reader channel
@@ -146,6 +149,7 @@ Token content is a offset array into the input, which should be a string."
 
 ;; These functions are weird. Should they be methods?
 
+;; rule-start is incremented in next-token
 (defun match-rule (mode-rules input rule-start)
   (loop for rule across mode-rules
 	for match = (match input rule rule-start)

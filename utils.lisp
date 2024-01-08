@@ -1,13 +1,22 @@
 (in-package #:stantler)
 
+(defun nthcdr* (n list)
+  "Like `nthcdr', but returns a list of the first n-1 elements as the second value."
+  (loop for i upto n
+	for head* = (car list*)
+	for list* = list then (cdr list*)
+	collect head* into head
+	;; Remove leading NIL from `head'.
+	finally (return (values list* (cdr head)))))
+
 (defclass children-mixin ()
   ((children%
-    :reader children
+    :accessor children
     :initarg :children)))
 
 (defclass child-mixin ()
   ((child%
-    :reader child
+    :accessor child
     :initarg :child)))
 
 (defun slurp-file (path)
@@ -20,7 +29,7 @@
       (read-sequence chars stream)
       chars)))
 
-;; Compatibility because #\Newline is platform-dependent
+;;; Platform compatible #\Newline replacement ==================================
 
 (defconstant +return+ (code-char #xA)
   "Carriage Return character")
@@ -28,7 +37,7 @@
 (defconstant +newline+ (code-char #xD)
   "Newline character")
 
-;;; End of File ================================================================
+;;; End of File Handlers =======================================================
 
 (define-condition eof-error (error)
   ((index%
@@ -36,16 +45,23 @@
     :initarg :index))
   (:documentation "Error for reading past the end of a character or token stream."))
 
-(defun look-ahead (input start &optional (count 0))
-  "Utility function to read (aref input (+ start count)).
-Signals eof-error if upper bounds check fails."
-  (let ((index (+ start count)))
-    (if (>= index (array-total-size input))
-	(error 'eof-error :index index)
-	(aref input index))))
+(defgeneric look-ahead (input start &optional count)
+  (:documentation "Utility function to read the `count'th element of `input'.
+Signals `eof-error' when reading past the end of the input.")
+  (:method ((input array) start &optional (count 0))
+    (let ((index (+ start count)))
+      (if (>= index (array-total-size input))
+	  (error 'eof-error :index index)
+	  (aref input index))))
+  (:method ((input list) start &optional (count 0))
+    (let* ((index (+ start count))
+	   (input* (nthcdr index input)))
+      (if input*
+	  (first input*)
+	  (error 'eof-error :index index)))))
 
 (defmacro with-no-eof-match (&body body)
-  "Evaluates to NIL when an eof-error is signaled."
+  "Evaluates body. If an `eof-error' is signaled, the error is captured and this form evaluates to NIL."
   `(handler-case (progn ,@body)
      (eof-error ()
        nil)))
