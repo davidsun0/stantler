@@ -1,5 +1,9 @@
 (in-package #:stantler)
 
+(defmacro with-gensyms (names &body body)
+  `(let ,(mapcar (lambda (name) `(,name (gensym ,(symbol-name name)))) names)
+     ,@body))
+
 (defun nthcdr* (n list)
   "Like `nthcdr', but returns a list of the first n-1 elements as the second value."
   (loop for i upto n

@@ -116,7 +116,7 @@
    (offset%
     :accessor offset
     :initarg :offset)
-   ;; Rule may be overwritten by lexer (why, ANTLR!?)
+   ;; Rule may be overwritten by lexer
    (rule%
     :accessor rule
     :initarg :rule)
@@ -133,82 +133,55 @@
 	(format stream "~A" (name (rule token)))
 	(format stream "~A ~S" (name (rule token)) (content token)))))
 
-(defun construct-token (rule channel input offset length)
-  "Utility function for generating lexer tokens.
-Token content is a offset array into the input, which should be a string."
-  (make-instance
-   'token
-   :rule rule
-   :channel channel
-   :offset (cons offset length)
-   :content (make-array
-	     length
-	     :element-type (array-element-type input)
-	     :displaced-index-offset offset
-	     :displaced-to input)))
-
-;; These functions are weird. Should they be methods?
-
-;; rule-start is incremented in next-token
-(defun match-rule (mode-rules input rule-start)
-  (loop for rule across mode-rules
-	for match = (match input rule rule-start)
-	when match
-	  collect (list rule match) into matches
-	  and maximize match into max-match
-	finally
-	   (return
-	     (values-list
-	      (cond
-		;; Zero matches
-		((null matches)
-		 nil)
-		;; One match
-		((= (length matches) 1)
-		 (first matches))
-		;; From The Definitive ANTLR4 Reference 15.6 (p. 285):
-		;; When multiple rules match, return the longest match
-		;; If there is a tie, the rule defined first wins.
-		(t
-		 (find-if (lambda (x) (= x max-match))
-			  matches
-			  :key 'second
-			  :from-end nil)))))))
-
-(defun next-token (input lexer token-start)
-  "Lexes the next token from the input at the offset `token-start'."
-  (let ((length 0)
-	(rule-start token-start)
-	rule
-	match)
-    (tagbody
-     loop
-       ;; Search for an applicable rule
-       (setf (values rule match)
-	     (match-rule
-	      (mode-rules lexer (mode lexer))
-	      input
-	      rule-start))
-       (unless rule
-	 (return-from next-token))
-       ;; Match may trigger additional rules
-       ;; Tail recurse to the next rule for `skip' and `more'
-       (when (skip-p rule)
-	 (incf rule-start match)
-	 (setf token-start rule-start)
-	 (setf length 0)
-	 (go loop))
-       (when (more-p rule)
-	 (incf rule-start match)
-	 (setf length match)
-	 (go loop))
-       (setf (mode lexer) (or (lexer-mode rule) :default)))
-    (construct-token
-     (or (token-type rule) rule)
-     (or (channel rule) :default)
-     input
-     token-start
-     (+ length match))))
+(defun next-token (input lexer start)
+  (loop with length = 0
+	with match = nil
+	with rule-start = start
+	with token-start = start
+	for rule = nil
+	do (loop with max-match = -1
+		 with best-rule = nil
+		 ;; Search for an applicable rule
+		 for r across (mode-rules lexer (mode lexer))
+		 for m = (match input r rule-start)
+		 ;; When multiple rules match, return the longest match.
+		 ;; If there is a tie, the rule defined first wins.
+		 when (and m (> m max-match))
+		   do (setf max-match m
+			    best-rule r)
+		 finally (when best-rule
+			   (setf match max-match rule best-rule)))
+	   (cond
+	     ;; No match
+	     ((null match) (return nil))
+	     ;; When there is a match, additional rules may be triggered.
+	     ;; Tail recurse to continue building the token.
+	     ((skip-p rule)
+	      (break)
+	      ;; Skip: The rule matches, but does not produce a token.
+	      ;; Continue matching at the new location with the next rule.
+	      (setf rule-start (+ rule-start match)
+		    token-start rule-start
+		    length 0))
+	     ((more-p rule)
+	      (break)
+	      ;; More: continue matching.
+	      ;; TODO: verify `more` semantics
+	      (setf rule-start (+ rule-start match)
+		    length match))
+	     ;; Successful match: exit the tagbody and produce a token.
+	     (t
+	      (setf (mode lexer) (or (lexer-mode rule) :default))
+	      (incf length match)
+	      (let ((contents (make-array length
+					  :element-type (array-element-type input)
+					  :displaced-index-offset token-start
+					  :displaced-to input)))
+		(return (make-instance 'token
+				       :rule    (or (token-type rule) rule)
+				       :channel (or (channel rule) :default)
+				       :offset  (cons token-start length)
+				       :content contents)))))))
 
 (defun lex (input lexer start)
   (loop for token = (next-token input lexer start)
