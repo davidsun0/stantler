@@ -1,48 +1,5 @@
 (in-package #:stantler)
 
-;;;; Text-specific matching rules ==============================================
-
-(defun char-rule (char &optional (comparison 'char=))
-  "Matches one character."
-  (make-instance 'object-literal-rule :value char :comparison comparison))
-
-(defun string-rule (string &optional (comparison 'char=))
-  "Matches a string literal."
-  (make-instance 'array-literal-rule :value string :comparison comparison))
-
-(defclass char-range-rule ()
-  ((low%
-    :reader low
-    :initarg :low)
-   (high%
-    :reader high
-    :initarg :high))
-  (:documentation "Matches a character with char-code between low and high, inclusive."))
-
-(defmethod match (input (rule char-range-rule) start)
-  (with-no-eof-match
-    (if (char<= (low rule)
-		(look-ahead input start)
-		(high rule))
-	1
-	nil)))
-
-;;; ANTLR has language actions, which allows for executing arbitrary code upon
-;;; lexing a pattern. Since this is Lisp, we use the built-in reader to parse Lisp
-;;; code.
-
-(defclass lisp-form-rule ()
-  ((read-eval
-    :reader read-eval
-    :initarg :read-eval
-    :initform nil))
-  (:documentation "Matches one Lisp form."))
-
-(defmethod match ((input string) (rule lisp-form-rule) (start integer))
-  (let ((*read-eval* (read-eval rule))
-	(*package* (find-package "CL-USER")))
-    (nth-value 1 (read-from-string input nil nil :start start))))
-
 ;;;; Lexer =====================================================================
 
 (defclass lexer ()
@@ -178,7 +135,7 @@
 					  :displaced-index-offset token-start
 					  :displaced-to input)))
 		(return (make-instance 'token
-				       :rule    (or (token-type rule) rule)
+				       :rule    (or (token-rule rule) rule)
 				       :channel (or (channel rule) :default)
 				       :offset  (cons token-start length)
 				       :content contents)))))))

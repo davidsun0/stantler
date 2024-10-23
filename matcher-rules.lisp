@@ -5,11 +5,6 @@
 Returns the number of items matched or NIL if the rule fails to match.
 Rules that sucessfully match no items return 0."))
 
-;;; 'NIL represents the no-match rule. It never matches anything.
-;;; Useful as a default or dummy rule.
-(defmethod match (input (rule null) start)
-  nil)
-
 ;;; Literal Rules =====================================================
 
 (defclass literal-rule ()
@@ -50,9 +45,43 @@ Rules that sucessfully match no items return 0."))
 	    return nil
 	  finally (return (length (value rule))))))
 
+(defclass string-literal-rule ()
+  ((value%
+    :reader value
+    :initarg :value)))
+
+(defmethod match ((input string) (rule string-literal-rule) start)
+  (if (string= (value rule) input :start2 start)
+      (length (value rule))
+      nil))
+
+(defclass char-range-rule ()
+  ((low%
+    :reader low
+    :initarg :low)
+   (high%
+    :reader high
+    :initarg :high))
+  (:documentation "Matches a character with char-code between low and high, inclusive."))
+
+(defmethod match (input (rule char-range-rule) start)
+  (with-no-eof-match
+    (if (char<= (low rule)
+		(look-ahead input start)
+		(high rule))
+	1
+	nil)))
+
 ;;; Special Rules =====================================================
 
-;; Ideally the wildcard-rule should be a singleton
+(defclass null-rule ()
+  ()
+  (:documentation "Never matches. Useful as a placeholder."))
+
+(defmethod match (input (rule null-rule) start)
+  (declare (ignore input rule start))
+  nil)
+
 (defclass wildcard-rule ()
   ()
   (:documentation "Matches any one object."))
@@ -62,14 +91,23 @@ Rules that sucessfully match no items return 0."))
       1
       nil))
 
-(defclass eof-rule ()
-  ()
-  (:documentation "Matches the end of the input."))
+;;; ANTLR has language actions, which allows for executing arbitrary code upon
+;;; lexing a pattern. Since this is Lisp, we use the built-in reader to parse Lisp
+;;; code.
 
-(defmethod match ((input array) (rule eof-rule) (start integer))
-  (if (> start (array-total-size input))
-      0
-      nil))
+(defclass eof-rule () ())
+
+(defclass lisp-form-rule ()
+  ((read-eval
+    :reader read-eval
+    :initarg :read-eval
+    :initform nil))
+  (:documentation "Matches one Lisp form."))
+
+(defmethod match ((input string) (rule lisp-form-rule) (start integer))
+  (let ((*read-eval* (read-eval rule))
+	(*package* (find-package "CL-USER")))
+    (nth-value 1 (read-from-string input nil nil :start start))))
 
 ;;; Compound Rules ====================================================
 
@@ -115,7 +153,7 @@ Rules that sucessfully match no items return 0."))
   (let ((count (match input (child rule) start)))
     (if count
 	count
-	nil)))
+	0)))
 
 (defclass repeat-rule (child-mixin)
   ()
@@ -130,10 +168,33 @@ Rules that sucessfully match no items return 0."))
 	  ;; Returns zero when child repeats zero times
 	  return total))
 
-(defclass lazy-repeat-rule (repeat-rule)
+;; The one-or-more-rule is not strictly necessary as it can be composed from by
+;; the pattern (a a*). However, it simplifies parse tree walkers as it removes
+;; some list manipulation.
+
+(defclass one-or-more-rule (child-mixin)
+  ()
+  (:documentation "Matches the child rule one or more times."))
+
+(defmethod match (input (rule one-or-more-rule) start)
+  (loop with total = 0
+	for count = (match input (child rule) (+ start total))
+	if count
+	  do (incf total count)
+	else
+	  return (if (plusp total)
+		     total
+		     nil)))
+
+(defclass lazy-rule ()
   ((stop%
     :reader stop
-    :initarg :stop))
+    :initarg :stop)))
+
+(defclass lazy-maybe-rule (lazy-rule child-mixin) ())
+
+(defclass lazy-repeat-rule (lazy-rule child-mixin)
+  ()
   (:documentation "Matches the child rule the fewest number of times before the stop rule matches."))
 
 (defmethod match (input (rule lazy-repeat-rule) start)
@@ -147,3 +208,5 @@ Rules that sucessfully match no items return 0."))
 	  do (setf count (match input child (+ start total)))
 	     (when count
 	       (incf total count)))))
+
+(defclass lazy-one-or-more-rule (lazy-rule child-mixin) ())
