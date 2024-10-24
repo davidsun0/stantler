@@ -1,12 +1,10 @@
 (in-package #:stantler)
 
-(defgeneric match (input rule start)
-  (:documentation "Matches `rule` on `input` at index `start`.
-Returns the number of items matched or NIL if the rule fails to match.
-Rules that sucessfully match no items return 0."))
+(defclass rule () ())
 
 ;;; Literal Rules =====================================================
 
+;; TODO: split into char-rule and token-rule
 (defclass literal-rule ()
   ((value%
     :reader value
@@ -19,41 +17,17 @@ Rules that sucessfully match no items return 0."))
     :initform 'identity
     :initarg :key)))
 
-(defclass object-literal-rule (literal-rule)
-  ()
+(defclass object-literal-rule (literal-rule) ()
   (:documentation "Matches a single object literal."))
 
-(defmethod match (input (rule object-literal-rule) start)
-  (with-accessors ((comparison comparison) (value value) (key key)) rule
-    (with-no-eof-match
-      (if (funcall comparison value (funcall key (look-ahead input start)))
-	  1
-	  nil))))
-
-;; TODO: funcall key w/ array-literal-rule
-(defclass array-literal-rule (literal-rule)
-  ()
+;; TODO: replace with string-literal-rule
+(defclass array-literal-rule (literal-rule) ()
   (:documentation "Matches an array of literals in sequence."))
-
-(defmethod match (input (rule array-literal-rule) start)
-  (with-no-eof-match
-    (loop for needle across (value rule)
-	  for offset from 0
-	  unless (funcall (comparison rule)
-			  needle
-			  (look-ahead input start offset))
-	    return nil
-	  finally (return (length (value rule))))))
 
 (defclass string-literal-rule ()
   ((value%
     :reader value
     :initarg :value)))
-
-(defmethod match ((input string) (rule string-literal-rule) start)
-  (if (string= (value rule) input :start2 start)
-      (length (value rule))
-      nil))
 
 (defclass char-range-rule ()
   ((low%
@@ -64,38 +38,21 @@ Rules that sucessfully match no items return 0."))
     :initarg :high))
   (:documentation "Matches a character with char-code between low and high, inclusive."))
 
-(defmethod match (input (rule char-range-rule) start)
-  (with-no-eof-match
-    (if (char<= (low rule)
-		(look-ahead input start)
-		(high rule))
-	1
-	nil)))
-
 ;;; Special Rules =====================================================
 
-(defclass null-rule ()
-  ()
+(defclass null-rule () ()
   (:documentation "Never matches. Useful as a placeholder."))
 
-(defmethod match (input (rule null-rule) start)
-  (declare (ignore input rule start))
-  nil)
-
-(defclass wildcard-rule ()
-  ()
+(defclass wildcard-rule () ()
   (:documentation "Matches any one object."))
-
-(defmethod match (input (rule wildcard-rule) start)
-  (if (look-ahead input start)
-      1
-      nil))
 
 ;;; ANTLR has language actions, which allows for executing arbitrary code upon
 ;;; lexing a pattern. Since this is Lisp, we use the built-in reader to parse Lisp
 ;;; code.
 
 (defclass eof-rule () ())
+
+;; Does this need a rule? Are language actions actually lexed?
 
 (defclass lisp-form-rule ()
   ((read-eval
@@ -104,87 +61,29 @@ Rules that sucessfully match no items return 0."))
     :initform nil))
   (:documentation "Matches one Lisp form."))
 
-(defmethod match ((input string) (rule lisp-form-rule) (start integer))
-  (let ((*read-eval* (read-eval rule))
-	(*package* (find-package "CL-USER")))
-    (nth-value 1 (read-from-string input nil nil :start start))))
-
 ;;; Compound Rules ====================================================
 
-(defclass or-rule (children-mixin)
-  ()
+(defclass or-rule (children-mixin) ()
   (:documentation "Matches the first applicable child rule."))
 
-(defmethod match (input (rule or-rule) start)
-  (loop for child in (children rule)
-	for count = (match input child start)
-	when count
-	  return count
-	finally (return nil)))
-
-(defclass and-rule (children-mixin)
-  ()
+(defclass and-rule (children-mixin) ()
   (:documentation "Matches if all children match consecutively, from left to right."))
 
-(defmethod match (input (rule and-rule) start)
-  (loop with total = 0
-	for child in (children rule)
-	for count = (match input child (+ start total))
-	if count
-	  do (incf total count)
-	else
-	  return nil
-	finally (return total)))
-
-(defclass not-rule (child-mixin)
-  ()
+(defclass not-rule (child-mixin) ()
   (:documentation "Matches if the child rule doesn't match."))
 
-(defmethod match (input (rule not-rule) start)
-  (if (match input (child rule) start)
-      nil
-      1))
-
-(defclass maybe-rule (child-mixin)
-  ()
+(defclass maybe-rule (child-mixin) ()
   (:documentation "Matches the child rule or nothing."))
 
-(defmethod match (input (rule maybe-rule) start)
-  (let ((count (match input (child rule) start)))
-    (if count
-	count
-	0)))
-
-(defclass repeat-rule (child-mixin)
-  ()
+(defclass repeat-rule (child-mixin) ()
   (:documentation "Matches the child multiple times."))
-
-(defmethod match (input (rule repeat-rule) start)
-  (loop with total = 0
-	for count = (match input (child rule) (+ start total))
-	if count
-	  do (incf total count)
-	else
-	  ;; Returns zero when child repeats zero times
-	  return total))
 
 ;; The one-or-more-rule is not strictly necessary as it can be composed from by
 ;; the pattern (a a*). However, it simplifies parse tree walkers as it removes
 ;; some list manipulation.
 
-(defclass one-or-more-rule (child-mixin)
-  ()
+(defclass one-or-more-rule (child-mixin) ()
   (:documentation "Matches the child rule one or more times."))
-
-(defmethod match (input (rule one-or-more-rule) start)
-  (loop with total = 0
-	for count = (match input (child rule) (+ start total))
-	if count
-	  do (incf total count)
-	else
-	  return (if (plusp total)
-		     total
-		     nil)))
 
 (defclass lazy-rule ()
   ((stop%
@@ -193,20 +92,116 @@ Rules that sucessfully match no items return 0."))
 
 (defclass lazy-maybe-rule (lazy-rule child-mixin) ())
 
-(defclass lazy-repeat-rule (lazy-rule child-mixin)
-  ()
+(defclass lazy-repeat-rule (lazy-rule child-mixin) ()
   (:documentation "Matches the child rule the fewest number of times before the stop rule matches."))
 
-(defmethod match (input (rule lazy-repeat-rule) start)
+(defclass lazy-one-or-more-rule (lazy-rule child-mixin) ())
+
+(defgeneric match (rule input start)
+  (:documentation "Matches `rule` on `input` at index `start`.
+Returns the number of items matched or NIL if the rule fails to match.
+Rules that sucessfully match no items return 0."))
+
+(defmethod match ((rule object-literal-rule) input start)
+  (with-accessors ((comparison comparison) (value value) (key key)) rule
+    (with-no-eof-match
+      (if (funcall comparison value (funcall key (look-ahead input start)))
+	  1
+	  nil))))
+
+(defmethod match ((rule array-literal-rule) input start)
+  (with-no-eof-match
+    (loop for needle across (value rule)
+	  for offset from 0
+	  unless (funcall (comparison rule)
+			  needle
+			  (look-ahead input start offset))
+	    return nil
+	  finally (return (length (value rule))))))
+
+(defmethod match ((rule string-literal-rule) (input string) start)
+  (if (string= (value rule) input :start2 start)
+      (length (value rule))
+      nil))
+
+(defmethod match ((rule char-range-rule) input start)
+  (with-no-eof-match
+    (if (char<= (low rule)
+		(look-ahead input start)
+		(high rule))
+	1
+	nil)))
+
+(defmethod match ((rule null-rule) input start)
+  (declare (ignore rule input start))
+  nil)
+
+(defmethod match ((rule wildcard-rule) input start)
+  (if (look-ahead input start)
+      1
+      nil))
+
+(defmethod match ((rule lisp-form-rule) (input string) (start integer))
+  (let ((*read-eval* (read-eval rule))
+	(*package* (find-package "CL-USER")))
+    (nth-value 1 (read-from-string input nil nil :start start))))
+
+(defmethod match ((rule or-rule) input start)
+  (loop for child in (children rule)
+	for count = (match child input start)
+	when count
+	  return count
+	finally (return nil)))
+
+(defmethod match ((rule and-rule) input start)
+  (loop with total = 0
+	for child in (children rule)
+	for count = (match child input (+ start total))
+	if count
+	  do (incf total count)
+	else
+	  return nil
+	finally (return total)))
+
+(defmethod match ((rule not-rule) input start)
+  (if (match (child rule) input start)
+      nil
+      1))
+
+(defmethod match ((rule maybe-rule) input start)
+  (let ((count (match (child rule) input start)))
+    (if count
+	count
+	0)))
+
+(defmethod match ((rule repeat-rule) input start)
+  (loop with total = 0
+	for count = (match (child rule) input (+ start total))
+	if count
+	  do (incf total count)
+	else
+	  ;; Returns zero when child repeats zero times
+	  return total))
+
+(defmethod match ((rule one-or-more-rule) input start)
+  (loop with total = 0
+	for count = (match (child rule) input (+ start total))
+	if count
+	  do (incf total count)
+	else
+	  return (if (plusp total)
+		     total
+		     nil)))
+
+(defmethod match ((rule lazy-repeat-rule) input start)
   (with-accessors ((child child) (stop stop)) rule
     (loop with total = 0
 	  ;; Stop rule
-	  for count = (match input stop (+ start total))
+	  for count = (match stop input (+ start total))
 	  when count
 	    return (+ total count)
 	  ;; Child rule
-	  do (setf count (match input child (+ start total)))
+	  do (setf count (match child input (+ start total)))
 	     (when count
 	       (incf total count)))))
 
-(defclass lazy-one-or-more-rule (lazy-rule child-mixin) ())

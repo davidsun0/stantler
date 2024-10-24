@@ -61,8 +61,8 @@
     :initform nil))
   (:documentation "Top level lexer rule."))
 
-(defmethod match (input (rule lexer-rule) start)
-  (match input (child rule) start))
+(defmethod match ((rule lexer-rule) input start)
+  (match (child rule) input start))
 
 ;;; When a rule successfully matches, the text it matches produces a token.
 
@@ -74,6 +74,7 @@
     :accessor offset
     :initarg :offset)
    ;; Rule may be overwritten by lexer
+   ;; Tokens' rule objects are EQ if they are equal
    (rule%
     :accessor rule
     :initarg :rule)
@@ -90,7 +91,7 @@
 	(format stream "~A" (name (rule token)))
 	(format stream "~A ~S" (name (rule token)) (content token)))))
 
-(defun next-token (input lexer start)
+(defun next-token (lexer input start)
   (loop with length = 0
 	with match = nil
 	with rule-start = start
@@ -100,7 +101,7 @@
 		 with best-rule = nil
 		 ;; Search for an applicable rule
 		 for r across (mode-rules lexer (mode lexer))
-		 for m = (match input r rule-start)
+		 for m = (match r input rule-start)
 		 ;; When multiple rules match, return the longest match.
 		 ;; If there is a tie, the rule defined first wins.
 		 when (and m (> m max-match))
@@ -135,13 +136,13 @@
 					  :displaced-index-offset token-start
 					  :displaced-to input)))
 		(return (make-instance 'token
-				       :rule    (or (token-rule rule) rule)
+				       :rule    (or (token-type rule) rule)
 				       :channel (or (channel rule) :default)
 				       :offset  (cons token-start length)
 				       :content contents)))))))
 
-(defun lex (input lexer start)
-  (loop for token = (next-token input lexer start)
+(defun lex (lexer input start)
+  (loop for token = (next-token lexer input start)
 	when token
 	  collect token into tokens
 	  and do (incf start (cdr (offset token)))

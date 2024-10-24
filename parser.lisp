@@ -3,6 +3,8 @@
 (defclass parser ()
   ((rules%
     :reader rules
+    :initarg :rules
+    ;; TODO: remove after bootstrapping
     :initform (make-hash-table :size 16 :test 'equal))))
 
 (defclass parser-subrule ()
@@ -28,15 +30,15 @@
 starting at index `start`."))
 
 (defmethod parse-tree ((rule object-literal-rule) input start)
-  (when (match input rule start)
+  (when (match rule input start)
     (look-ahead input start)))
 
 (defmethod parse-tree ((and-rule and-rule) input start)
   (loop with length = 0
 	for child in (children and-rule)
-	for count = (match input child (+ start length))
+	for count = (match child input (+ start length))
 	if count
-	  collect (parse-tree input child (+ start length)) into nodes
+	  collect (parse-tree child input (+ start length)) into nodes
 	  and do (incf length count)
 	else
 	  return nil
@@ -44,26 +46,26 @@ starting at index `start`."))
 
 (defmethod parse-tree ((or-rule or-rule) input start)
   (loop for child in (children or-rule)
-	for count = (match input child start)
+	for count = (match child input start)
 	when count
-	  return (parse-tree input child start)
+	  return (parse-tree child input start)
 	finally (return nil)))
 
 (defmethod parse-tree ((rule parser-subrule) input start)
   (let ((subrule (gethash (name rule) (rules *antlr-parser*))))
-    (when (match input subrule start)
-      (let ((children (parse-tree input subrule start)))
+    (when (match subrule input start)
+      (let ((children (parse-tree subrule input start)))
 	(unless (listp children)
 	  (setf children (list children)))
 	(make-instance 'parse-node
 		       :children children
-		       :rule (name rule))))))
+		       :rule rule)))))
 
 (defmethod parse-tree ((rule repeat-rule) input start)
   (loop with length = 0
-	for count = (match input (child rule) (+ start length))
+	for count = (match (child rule) input (+ start length))
 	if count
-	  collect (parse-tree input (child rule) (+ start length))
+	  collect (parse-tree (child rule) input (+ start length))
 	    into results
 	  and do (incf length count)
 	else
@@ -71,16 +73,17 @@ starting at index `start`."))
 
 (defmethod parse-tree ((rule one-or-more-rule) input start)
   (loop with length = 0
-	for count = (match input (child rule) (+ start length))
+	for count = (match (child rule) input (+ start length))
 	if count
-	  collect (parse-tree input (child rule) (+ start length))
+	  collect (parse-tree (child rule) input (+ start length))
 	    into results
 	    and do (incf length count)
 	else
 	  return results))
 
 (defmethod parse-tree ((rule maybe-rule) input start)
-  (if (plusp (match input rule start))
-      (parse-tree input (child rule) start)
+  (if (plusp (match rule input start))
+      (parse-tree (child rule) input start)
       '()))
 
+;; TODO: compile parse-tree
