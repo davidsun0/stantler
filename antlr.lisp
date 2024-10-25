@@ -4,13 +4,20 @@ ANTLR4 Lexer / Parser
 
 (in-package #:stantler)
 
-(defparameter *antlr-lexer*
+(defvar *antlr-lexer*
   (make-instance 'lexer))
-
 
 #|
 Bootstrap Lexer / Parser
 |#
+
+(defun char-rule (char &optional (comparison 'char=))
+  "Matches one character."
+  (make-instance 'object-literal-rule :value char :comparison comparison))
+
+(defun string-rule (string &optional (comparison 'char=))
+  "Matches a string literal."
+  (make-instance 'array-literal-rule :value string :comparison comparison))
 
 (defun literal (literal)
   (cond
@@ -34,6 +41,9 @@ Bootstrap Lexer / Parser
 (defun repeat (child)
   (make-instance 'repeat-rule :child child))
 
+(defun one-or-more (child)
+  (make-instance 'one-or-more-rule :child child))
+
 (defun not-rule (child)
   (make-instance 'not-rule :child child))
 
@@ -48,7 +58,7 @@ Bootstrap Lexer / Parser
 	      (and-rule (literal "/**") (lazy-repeat wildcard (literal "*/")))
 	      :channel "COMMENT")
   (lexer-rule "BLOCK_COMMENT"
-	      (And-rule (literal "/*") (lazy-repeat wildcard (literal "*/")))
+	      (and-rule (literal "/*") (lazy-repeat wildcard (literal "*/")))
 	      :channel "COMMENT")
   (lexer-rule "LINE_COMMENT"
 	      (and-rule (literal "//")
@@ -64,15 +74,7 @@ Bootstrap Lexer / Parser
   (lexer-rule "STRING_LITERAL"
 	      (and-rule (literal #\')
 			(repeat (or-rule (and-rule (literal #\\)
-						   (or-rule
-						    (literal #\b)
-						    (literal #\t)
-						    (literal #\n)
-						    (literal #\f)
-						    (literal #\r)
-						    (literal #\")
-						    (literal #\')
-						    (literal #\\)))
+						   wildcard)
 					 (not-rule (or-rule
 						    (literal #\')
 						    (literal +return+)
@@ -164,7 +166,22 @@ Bootstrap Lexer / Parser
 		(and-rule white-space (repeat white-space))
 		:channel "OFF_CHANNEL"))
 
+;;; ANTLR Lexer converts ID tokens to either TOKEN_REF or RULE_REF based on text case
+;;; Dummy rules are used because token-rule compares rules by eq
+  (lexer-rule "TOKEN_REF" (make-instance 'null-rule))
+  (lexer-rule "RULE_REF" (make-instance 'null-rule))
+
   ) ; end let
+
+(defun convert-id (token)
+  (when (string= "ID" (name (rule token)))
+    (setf (rule token)
+	  (find-rule
+	   (if (upper-case-p (char (content token) 0))
+	       "TOKEN_REF"
+	       "RULE_REF")
+	   *antlr-lexer*)))
+  token)
 
 (defun find-rule (name lexer)
   (loop for mode in (modes lexer)
@@ -181,480 +198,438 @@ Bootstrap Lexer / Parser
 (defun maybe (child)
   (make-instance 'maybe-rule :child child))
 
-(defclass parser-rule-reference ()
-  ((name
-    :initarg :name
-    :reader name)))
-
-(defun parser-ref (rule-name)
-  (make-instance 'parser-rule-reference :name rule-name))
-
-
-;;; ANTLR Lexer converts ID tokens to either TOKEN_REF or RULE_REF based on text case
-;;; Dummy rules are used because token-rule compares rules by eq
-(lexer-rule "TOKEN_REF" nil)
-(lexer-rule "RULE_REF" nil)
-
-(defun convert-id (token)
-  (when (string= "ID" (name (rule token)))
-    (setf (rule token)
-	  (find-rule
-	   (if (upper-case-p (aref (content token) 0))
-	       "TOKEN_REF"
-	       "RULE_REF")
-	   *antlr-lexer*)))
-  token)
-
-(defclass parser ()
-  ((rules%
-    :reader rules
-    :initform (make-hash-table :size 16 :test 'equal))))
-
-(defparameter *antlr-parser*
+(defvar *antlr-parser*
   (make-instance 'parser))
 
 (defun parser-rule (name rule)
   (setf (gethash name (rules *antlr-parser*)) rule))
 
-(defclass parser-subrule ()
-  ((name%
-    :initarg :name
-    :reader name)))
-
-(defmethod match (input (rule parser-subrule) start)
+(defmethod match ((rule parser-subrule) input start)
   (let ((subrule (gethash (name rule) (rules *antlr-parser*))))
-    (format t "~A ~A~%" (name rule) start)
-    (match input subrule start)))
-
-(defgeneric replace-parser-refs (rule)
-  (:method ((rule t)) t)
-  (:method ((child-rule child-mixin))
-    (let ((child (child child-rule)))
-      (if (typep child 'parser-rule-reference)
-	  (setf (child child-rule)
-		(make-instance 'parser-subrule :name (name child)))
-	  (replace-parser-refs child))))
-  (:method ((children-rule children-mixin))
-    (loop for children on (children children-rule)
-	  for child = (car children)
-	  if (typep child 'parser-rule-reference)
-	    do (setf (car children)
-		     (make-instance 'parser-subrule :name (name child)))
-	  else
-	    do (replace-parser-refs child)))
-  (:method ((parser parser))
-    (loop for value being the hash-values of (rules parser)
-	  do (replace-parser-refs value))))
-
-(parser-rule
- "grammarSpec"
- (and-rule (parser-ref "grammarDecl")
-	   (repeat (parser-ref "prequelConstruct"))
-	   (parser-ref "rules")
-	   (repeat (parser-ref "modeSpec"))
-	   (token-rule "EOF")))
-
-(parser-rule
- "grammarDecl"
- (and-rule (parser-ref "grammarType")
-	   (parser-ref "identifier")
-	   (token-rule "SEMI")))
-
-(parser-rule
- "grammarType"
- (or-rule (and-rule (token-rule "LEXER") (token-rule "GRAMMAR"))
-	  (and-rule (token-rule "PARSER") (token-rule "GRAMMAR"))
-	  (token-rule "GRAMMAR")))
-
-(parser-rule
- "prequelConstruct"
- (or-rule (parser-ref "optionsSpec")
-	  (parser-ref "delegateGrammars")
-	  (parser-ref "tokensSpec")
-	  (parser-ref "channelsSpec")
-	  (parser-ref "action_")))
-
-(parser-rule
- "optionsSpec"
- (and-rule (token-rule "OPTIONS")
-	   (repeat (and-rule (parser-ref "option")
-				   (token-rule "SEMI")))
-	   (token-rule "RBRACE")))
-
-(parser-rule
- "option"
- (and-rule (parser-ref "identifier")
-	   (token-rule "ASSIGN")
-	   (parser-ref "optionValue")))
-
-(parser-rule
- "optionValue"
- (or-rule
-  (and-rule (parser-ref "identifier")
-	    (repeat (and-rule (token-rule "DOT")
-				    (parser-ref "identifier"))))
-  (token-rule "STRING_LITERAL")
-  (parser-ref "actionBlock")
-  (token-rule "INT")))
-
-(parser-rule
- "delegateGrammar"
- (and-rule (parser-ref "identifier")
-	   (maybe (and-rule (token-rule "ASSIGN")
-				 (parser-ref "identifier")))))
-
-(parser-rule
- "tokensSpec"
- (and-rule (token-rule "TOKENS")
-	   (maybe (parser-ref "idList"))
-	   (token-rule "RBRACE")))
-
-(parser-rule
- "channelsSpec"
- (and-rule (token-rule "CHANNELS")
-	   (maybe (parser-ref "idList"))
-	   (token-rule "RBRACE")))
-
-(parser-rule
- "idList"
- (and-rule (parser-ref "identifier")
-	   (repeat (and-rule (token-rule "COMMA")
-				   (parser-ref "identifier")))
-	   (maybe (token-rule "COMMA"))))
-
-(parser-rule
- "action_"
- (and-rule (token-rule "AT")
-	   (maybe (and-rule (parser-ref "actionScopeName")
-				 (token-rule "COLONCOLON")))
-	   (parser-ref "identifier")
-	   (parser-ref "actionBlock")))
-
-(parser-rule
- "actionScopeName"
- (or-rule (parser-ref "identifier")
-	  (token-rule "LEXER")
-	  (token-rule "PARSER")))
-
-(parser-rule
- "actionBlock"
- (and-rule (token-rule "BEGIN_ACTION")
-	   (repeat (token-rule "ACTION_CONTENT"))
-	   (token-rule "END_ACTION")))
-
-(parser-rule
- "argActionBlock"
- (and-rule (token-rule "BEGIN_ARGUMENT")
-	   (repeat (token-rule "ACTION_CONTENT"))
-	   (token-rule "END_ARGUMENT")))
-
-(parser-rule
- "modeSpec"
- (and-rule (token-rule "MODE")
-	   (parser-ref "identifier")
-	   (token-rule "SEMI")
-	   (repeat (parser-ref "lexerRuleSpec"))))
-
-(parser-rule
- "rules"
- (repeat (parser-ref "ruleSpec")))
-
-(parser-rule
- "ruleSpec"
- (or-rule (parser-ref "parserRuleSpec")
-	  (parser-ref "lexerRuleSpec")))
-
-(parser-rule
- "parserRuleSpec"
- (and-rule
-  (maybe (parser-ref "ruleModifiers"))
-  (token-rule "RULE_REF")
-  (maybe (parser-ref "argActionBlock"))
-  (maybe (parser-ref "ruleReturns"))
-  (maybe (parser-ref "throwsSpec"))
-  (maybe (parser-ref "localsSpec"))
-  (repeat (parser-ref "rulePrequel"))
-  (token-rule "COLON")
-  (parser-ref "ruleBlock")
-  (token-rule "SEMI")
-  (parser-ref "exceptionGroup")))
-
-(parser-rule
- "exceptionGroup"
- (and-rule
-  (repeat (parser-ref "exceptionHandler"))
-  (maybe (parser-ref "finlalyClause"))))
-
-(parser-rule
- "exceptionHandler"
- (and-rule
-  (token-rule "CATCH")
-  (parser-ref "argActionBlock")
-  (parser-ref "actionBlock")))
-
-(parser-rule
- "finallyClause"
- (and-rule
-  (token-rule "FINALLY")
-  (parser-ref "actionBlock")))
-
-(parser-rule
- "rulePrequel"
- (or-rule (parser-ref "optionsSpec") (parser-ref "ruleAction")))
-
-(parser-rule
- "ruleReturns"
- (and-rule (token-rule "RETURNS") (parser-ref "argActionBlock")))
-
-(parser-rule
- "throwsSpec"
- (and-rule
-  (token-rule "THROWS")
-  (parser-ref "identifier")
-  (repeat (and-rule (token-rule "COMMA") (parser-ref "identifier")))))
-
-(parser-rule
- "localsSpec"
- (and-rule (token-rule "LOCALS") (parser-ref "argAtionBlock")))
-
-(parser-rule
- "ruleAction"
- (and-rule
-  (token-rule "AT")
-  (parser-ref "identifier")
-  (parser-ref "actionBlock")))
-
-(parser-rule
- "ruleModifiers"
- (and-rule
-  (parser-ref "ruleModifier")
-  (repeat (parser-ref "ruleModifier"))))
-
-(parser-rule
- "ruleModifier"
- (or-rule
-  (token-rule "PUBLIC")
-  (token-rule "PRIVATE")
-  (token-rule "PROTECTED")
-  (token-rule "FRAGMENT")))
-
-(parser-rule "ruleBlock" (parser-ref "ruleAltList"))
-
-(parser-rule
- "ruleAltList"
- (and-rule
-  (parser-ref "labeledAlt")
-  (repeat (and-rule (token-rule "OR") (parser-ref "labeledAlt")))))
-
-(parser-rule
- "labeledAlt"
- (and-rule
-  (parser-ref "alternative")
-  (maybe (and-rule (token-rule "POUND") (parser-ref "identifier")))))
-
-(parser-rule
- "lexerRuleSpec"
- (and-rule
-  (maybe (token-rule "FRAGMENT"))
-  (token-rule "TOKEN_REF")
-  (maybe (parser-ref "optionsSpec"))
-  (token-rule "COLON")
-  (parser-ref "lexerRuleBlock")
-  (token-rule "SEMI")))
-
-(parser-rule "lexerRuleBlock" (parser-ref "lexerAltList"))
-
-(parser-rule
- "lexerAltList"
- (and-rule
-  (parser-ref "lexerAlt")
-  (repeat (and-rule (token-rule "OR") (parser-ref "lexerAlt")))))
-
-(parser-rule
- "lexerAlt"
- (maybe
-  (and-rule (parser-ref "lexerElements")
-	    (maybe (parser-ref "lexerCommands")))))
-
-(parser-rule
- "lexerElements"
- (maybe (and-rule (token-rule "lexerElement")
-		  (repeat (token-rule "lexerElement")))))
-
-(parser-rule
- "lexerElement"
- (or-rule
-  (and-rule (parser-ref "labeledLexerElement") (maybe (parser-ref "ebnfSuffix")))
-  (and-rule (parser-ref "lexerAtom") (maybe (parser-ref "ebnfSuffix")))
-  (and-rule (parser-ref "lexerBlock") (maybe (parser-ref "ebnfSuffix")))
-  (and-rule (parser-ref "actionBlock") (maybe (token-rule "QUESTION")))))
-
-(parser-rule
- "labeledLexerElement"
- (and-rule
-  (parser-ref "identifier")
-  (or-rule (token-rule "ASSIGN") (token-rule "PLUS_ASSIGN"))
-  (or-rule (parser-ref "lexerAtom") (parser-ref "lexerBlock"))))
-
-(parser-rule
- "lexerBlock"
- (and-rule (token-rule "LPAREN") (parser-ref "lexerAltList") (token-rule "RPAREN")))
-
-(parser-rule
- "lexerCommands"
- (and-rule
-  (token-rule "RARROW")
-  (parser-ref "lexerCommand")
-  (repeat (and-rule (token-rule "COMMA") (parser-ref "lexerCommand")))))
-
-(parser-rule
- "lexerCommand"
- (or-rule
-  (and-rule
-   (parser-ref "lexerCommandName")
-   (token-rule "LPAREN")
-   (parser-ref "lexerCommandExpr")
-   (token-rule "RPAREN"))
-  (parser-ref "lexerCommandName")))
-
-(parser-rule
- "lexerCommandName"
- (or-rule (parser-ref "identifier") (token-rule "MODE")))
-
-(parser-rule
- "lexerCommandExpr"
- (or-rule (parser-ref "identifier") (token-rule "INT")))
-
-(parser-rule
- "altList"
- (and-rule (parser-ref "alternative")
-	   (repeat (and-rule (token-rule "OR") (parser-ref "alternative")))))
-
-(parser-rule
- "alternative"
- (and-rule (maybe (parser-ref "elementOptions"))
-	   (parser-ref "element")
-	   (repeat (parser-ref "element"))))
-
-(parser-rule
- "element"
- (or-rule
-  (and-rule (parser-ref "labeledElement") (maybe (parser-ref "ebnfSuffix")))
-  (and-rule (parser-ref "atom") (maybe (parser-ref "ebnfSuffix")))
-  (parser-ref "ebnf")
-  (and-rule (parser-ref "actionBlock") (maybe (token-rule "QUESTION")))))
-
-(parser-rule
- "labeledElement"
- (and-rule
-  (parser-ref "identifier")
-  (or-rule (token-rule "ASSIGN") (token-rule "PLUS_ASSIGN"))
-  (or-rule (parser-ref "atom") (parser-ref "block"))))
-
-(parser-rule
- "ebnf"
- (and-rule (parser-ref "block") (maybe (parser-ref "blockSuffix"))))
-
-(parser-rule "blockSuffix" (parser-ref "ebnfSuffix"))
-
-(parser-rule
- "ebnfSuffix"
- (or-rule
-  (and-rule (token-rule "QUESTION") (maybe (token-rule "QUESTION")))
-  (and-rule (token-rule "STAR") (maybe (token-rule "QUESTION")))
-  (and-rule (token-rule "PLUS") (maybe (token-rule "QUESTION")))))
-
-(parser-rule
- "lexerAtom"
- (or-rule
-  (parser-ref "characterRange")
-  (parser-ref "terminal")
-  (parser-ref "notSet")
-  (token-rule "LEXER_CHAR_SET")
-  (and-rule (token-rule "DOT") (maybe (parser-ref "elementOptions")))))
-
-(parser-rule
- "atom"
- (or-rule
-  (parser-ref "terminal")
-  (parser-ref "ruleref")
-  (parser-ref "notSet")
-  (and-rule (token-rule "DOT") (maybe (parser-ref "elementOptions")))))
-
-(parser-rule
- "notSet"
- (or-rule
-  (and-rule (token-rule "NOT") (parser-ref "setElement"))
-  (and-rule (token-rule "NOT") (parser-ref "blockSet"))))
-
-(parser-rule
- "blockSet"
- (and-rule
-  (token-rule "LPAREN")
-  (parser-ref "setElement")
-  (repeat (and-rule (or-rule (token-rule "OR") (parser-ref "setElement"))))
-  (token-rule "RPAREN")))
-
-(parser-rule
- "setElement"
- (or-rule
-  (and-rule (token-rule "TOKEN_REF") (maybe (parser-ref "elementOptions")))
-  (and-rule (token-rule "STRING_LITERAL") (maybe (parser-ref "elementOptions")))
-  (parser-ref "characterRange")
-  (token-rule "LEXER_CHAR_SET")))
-
-(parser-rule
- "block"
- (and-rule (token-rule "LPAREN")
-	   (maybe (and-rule (maybe (parser-ref "optionsSpec"))
-			   (repeat (parser-ref "ruleAction"))
-			   (token-rule "COLON")))
-	   (parser-ref "altList")
-	   (token-rule "RPAREN")))
-
-(parser-rule
- "ruleref"
- (and-rule (token-rule "RULE_REF")
-	   (maybe (parser-ref "argActionBlock"))
-	   (maybe (parser-ref "elementOptions"))))
-
-(parser-rule
- "characterRange"
- (and-rule (token-rule "STRING_LITERAL") (parser-ref "range") (token-rule "STRING_LITERAL")))
-
-(parser-rule
- "terminal"
- (or-rule
-  (and-rule (token-rule "TOKEN_REF") (maybe (parser-ref "elementOptions")))
-  (and-rule (token-rule "STRING_LITERAL") (maybe (parser-ref "elementOptions")))))
-
-(parser-rule
- "elementOptions"
- (and-rule (token-rule "LT")
-	   (parser-ref "elementOption")
-	   (repeat (and-rule (token-rule "COMMA") (parser-ref "elementOption")))
-	   (token-rule "GT")))
-
-(parser-rule
- "elementOption"
- (or-rule
-  (parser-ref "identifier")
-  (and-rule (parser-ref "identifier")
-	    (token-rule "ASSIGN")
-	    (or-rule (parser-ref "identifier") (token-rule "STRING_LITERAL")))))
-
-(parser-rule "identifier" (or-rule (token-rule "RULE_REF") (token-rule "TOKEN_REF")))
-
-;;(replace-parser-refs *antlr-parser*)
-
+    (match subrule input start)))
+
+(defun parser-subrule (name)
+  (make-instance 'parser-subrule :name name))
+
+(eval-when (:load-toplevel :execute)
+  (parser-rule
+   "grammarSpec"
+   (and-rule (parser-subrule "grammarDecl")
+	     (repeat (parser-subrule "prequelConstruct"))
+	     (parser-subrule "rules")
+	     (repeat (parser-subrule "modeSpec"))))
+
+  (parser-rule
+   "grammarDecl"
+   (and-rule (parser-subrule "grammarType")
+	     (parser-subrule "identifier")
+	     (token-rule "SEMI")))
+
+  (parser-rule
+   "grammarType"
+   (or-rule (and-rule (token-rule "LEXER") (token-rule "GRAMMAR"))
+	    (and-rule (token-rule "PARSER") (token-rule "GRAMMAR"))
+	    (token-rule "GRAMMAR")))
+
+  (parser-rule
+   "prequelConstruct"
+   (or-rule (parser-subrule "optionsSpec")
+	    (parser-subrule "delegateGrammars")
+	    (parser-subrule "tokensSpec")
+	    (parser-subrule "channelsSpec")
+	    (parser-subrule "action_")))
+
+  (parser-rule
+   "optionsSpec"
+   (and-rule (token-rule "OPTIONS")
+	     (repeat (and-rule (parser-subrule "option")
+			       (token-rule "SEMI")))
+	     (token-rule "RBRACE")))
+
+  (parser-rule
+   "option"
+   (and-rule (parser-subrule "identifier")
+	     (token-rule "ASSIGN")
+	     (parser-subrule "optionValue")))
+
+  (parser-rule
+   "optionValue"
+   (or-rule
+    (and-rule (parser-subrule "identifier")
+	      (repeat (and-rule (token-rule "DOT")
+				(parser-subrule "identifier"))))
+    (token-rule "STRING_LITERAL")
+    (parser-subrule "actionBlock")
+    (token-rule "INT")))
+
+  (parser-rule
+   "delegateGrammars"
+   (and-rule (token-rule "IMPORT")
+	     (parser-subrule "delegateGrammar")
+	     (repeat (and-rule (token-rule "COMMA") (parser-subrule "delegateGrammar")))
+	     (token-rule "SEMI")))
+
+  (parser-rule
+   "delegateGrammar"
+   (and-rule (parser-subrule "identifier")
+	     (maybe (and-rule (token-rule "ASSIGN")
+			      (parser-subrule "identifier")))))
+
+  (parser-rule
+   "tokensSpec"
+   (and-rule (token-rule "TOKENS")
+	     (maybe (parser-subrule "idList"))
+	     (token-rule "RBRACE")))
+
+  (parser-rule
+   "channelsSpec"
+   (and-rule (token-rule "CHANNELS")
+	     (maybe (parser-subrule "idList"))
+	     (token-rule "RBRACE")))
+
+  (parser-rule
+   "idList"
+   (and-rule (parser-subrule "identifier")
+	     (repeat (and-rule (token-rule "COMMA")
+			       (parser-subrule "identifier")))
+	     (maybe (token-rule "COMMA"))))
+
+  (parser-rule
+   "action_"
+   (and-rule (token-rule "AT")
+	     (maybe (and-rule (parser-subrule "actionScopeName")
+			      (token-rule "COLONCOLON")))
+	     (parser-subrule "identifier")
+	     (parser-subrule "actionBlock")))
+
+  (parser-rule
+   "actionScopeName"
+   (or-rule (parser-subrule "identifier")
+	    (token-rule "LEXER")
+	    (token-rule "PARSER")))
+
+  (parser-rule
+   "actionBlock"
+   (and-rule (token-rule "BEGIN_ACTION")
+	     (repeat (token-rule "ACTION_CONTENT"))
+	     (token-rule "END_ACTION")))
+
+  (parser-rule
+   "argActionBlock"
+   (and-rule (token-rule "BEGIN_ARGUMENT")
+	     (repeat (token-rule "ACTION_CONTENT"))
+	     (token-rule "END_ARGUMENT")))
+
+  (parser-rule
+   "modeSpec"
+   (and-rule (token-rule "MODE")
+	     (parser-subrule "identifier")
+	     (token-rule "SEMI")
+	     (repeat (parser-subrule "lexerRuleSpec"))))
+
+  (parser-rule
+   "rules"
+   (repeat (parser-subrule "ruleSpec")))
+
+  (parser-rule
+   "ruleSpec"
+   (or-rule (parser-subrule "parserRuleSpec")
+	    (parser-subrule "lexerRuleSpec")))
+
+  (parser-rule
+   "parserRuleSpec"
+   (and-rule
+    (maybe (parser-subrule "ruleModifiers"))
+    (token-rule "RULE_REF")
+    (maybe (parser-subrule "argActionBlock"))
+    (maybe (parser-subrule "ruleReturns"))
+    (maybe (parser-subrule "throwsSpec"))
+    (maybe (parser-subrule "localsSpec"))
+    (repeat (parser-subrule "rulePrequel"))
+    (token-rule "COLON")
+    (parser-subrule "ruleBlock")
+    (token-rule "SEMI")
+    (parser-subrule "exceptionGroup")))
+
+  (parser-rule
+   "exceptionGroup"
+   (and-rule
+    (repeat (parser-subrule "exceptionHandler"))
+    (maybe (parser-subrule "finallyClause"))))
+
+  (parser-rule
+   "exceptionHandler"
+   (and-rule
+    (token-rule "CATCH")
+    (parser-subrule "argActionBlock")
+    (parser-subrule "actionBlock")))
+
+  (parser-rule
+   "finallyClause"
+   (and-rule
+    (token-rule "FINALLY")
+    (parser-subrule "actionBlock")))
+
+  (parser-rule
+   "rulePrequel"
+   (or-rule (parser-subrule "optionsSpec") (parser-subrule "ruleAction")))
+
+  (parser-rule
+   "ruleReturns"
+   (and-rule (token-rule "RETURNS") (parser-subrule "argActionBlock")))
+
+  (parser-rule
+   "throwsSpec"
+   (and-rule
+    (token-rule "THROWS")
+    (parser-subrule "identifier")
+    (repeat (and-rule (token-rule "COMMA") (parser-subrule "identifier")))))
+
+  (parser-rule
+   "localsSpec"
+   (and-rule (token-rule "LOCALS") (parser-subrule "argActionBlock")))
+
+  (parser-rule
+   "ruleAction"
+   (and-rule
+    (token-rule "AT")
+    (parser-subrule "identifier")
+    (parser-subrule "actionBlock")))
+
+  (parser-rule
+   "ruleModifiers"
+   (and-rule
+    (parser-subrule "ruleModifier")
+    (repeat (parser-subrule "ruleModifier"))))
+
+  (parser-rule
+   "ruleModifier"
+   (or-rule
+    (token-rule "PUBLIC")
+    (token-rule "PRIVATE")
+    (token-rule "PROTECTED")
+    (token-rule "FRAGMENT")))
+
+  (parser-rule "ruleBlock" (parser-subrule "ruleAltList"))
+
+  (parser-rule
+   "ruleAltList"
+   (and-rule
+    (parser-subrule "labeledAlt")
+    (repeat (and-rule (token-rule "OR") (parser-subrule "labeledAlt")))))
+
+  (parser-rule
+   "labeledAlt"
+   (and-rule
+    (parser-subrule "alternative")
+    (maybe (and-rule (token-rule "POUND") (parser-subrule "identifier")))))
+
+  (parser-rule
+   "lexerRuleSpec"
+   (and-rule
+    (maybe (token-rule "FRAGMENT"))
+    (token-rule "TOKEN_REF")
+    (maybe (parser-subrule "optionsSpec"))
+    (token-rule "COLON")
+    (parser-subrule "lexerRuleBlock")
+    (token-rule "SEMI")))
+
+  (parser-rule "lexerRuleBlock" (parser-subrule "lexerAltList"))
+
+  (parser-rule
+   "lexerAltList"
+   (and-rule
+    (parser-subrule "lexerAlt")
+    (repeat (and-rule (token-rule "OR") (parser-subrule "lexerAlt")))))
+
+  (parser-rule
+   "lexerAlt"
+   (maybe
+    (and-rule (parser-subrule "lexerElements")
+	      (maybe (parser-subrule "lexerCommands")))))
+
+  (parser-rule
+   "lexerElements"
+   (maybe (one-or-more (parser-subrule "lexerElement"))))
+
+  (parser-rule
+   "lexerElement"
+   (or-rule
+    (and-rule (parser-subrule "labeledLexerElement") (maybe (parser-subrule "ebnfSuffix")))
+    (and-rule (parser-subrule "lexerAtom") (maybe (parser-subrule "ebnfSuffix")))
+    (and-rule (parser-subrule "lexerBlock") (maybe (parser-subrule "ebnfSuffix")))
+    (and-rule (parser-subrule "actionBlock") (maybe (token-rule "QUESTION")))))
+
+  (parser-rule
+   "labeledLexerElement"
+   (and-rule
+    (parser-subrule "identifier")
+    (or-rule (token-rule "ASSIGN") (token-rule "PLUS_ASSIGN"))
+    (or-rule (parser-subrule "lexerAtom") (parser-subrule "lexerBlock"))))
+
+  (parser-rule
+   "lexerBlock"
+   (and-rule (token-rule "LPAREN") (parser-subrule "lexerAltList") (token-rule "RPAREN")))
+
+  (parser-rule
+   "lexerCommands"
+   (and-rule
+    (token-rule "RARROW")
+    (parser-subrule "lexerCommand")
+    (repeat (and-rule (token-rule "COMMA") (parser-subrule "lexerCommand")))))
+
+  (parser-rule
+   "lexerCommand"
+   (or-rule
+    (and-rule
+     (parser-subrule "lexerCommandName")
+     (token-rule "LPAREN")
+     (parser-subrule "lexerCommandExpr")
+     (token-rule "RPAREN"))
+    (parser-subrule "lexerCommandName")))
+
+  (parser-rule
+   "lexerCommandName"
+   (or-rule (parser-subrule "identifier") (token-rule "MODE")))
+
+  (parser-rule
+   "lexerCommandExpr"
+   (or-rule (parser-subrule "identifier") (token-rule "INT")))
+
+  (parser-rule
+   "altList"
+   (and-rule (parser-subrule "alternative")
+	     (repeat (and-rule (token-rule "OR") (parser-subrule "alternative")))))
+
+  (parser-rule
+   "alternative"
+   (maybe (and-rule (maybe (parser-subrule "elementOptions"))
+		    (one-or-more (parser-subrule "element")))))
+
+  (parser-rule
+   "element"
+   (or-rule
+    (and-rule (parser-subrule "labeledElement") (maybe (parser-subrule "ebnfSuffix")))
+    (and-rule (parser-subrule "atom") (maybe (parser-subrule "ebnfSuffix")))
+    (parser-subrule "ebnf")
+    (and-rule (parser-subrule "actionBlock") (maybe (token-rule "QUESTION")))))
+
+  (parser-rule
+   "labeledElement"
+   (and-rule
+    (parser-subrule "identifier")
+    (or-rule (token-rule "ASSIGN") (token-rule "PLUS_ASSIGN"))
+    (or-rule (parser-subrule "atom") (parser-subrule "block"))))
+
+  (parser-rule
+   "ebnf"
+   (and-rule (parser-subrule "block") (maybe (parser-subrule "blockSuffix"))))
+
+  (parser-rule "blockSuffix" (parser-subrule "ebnfSuffix"))
+
+  (parser-rule
+   "ebnfSuffix"
+   (or-rule
+    (and-rule (token-rule "QUESTION") (maybe (token-rule "QUESTION")))
+    (and-rule (token-rule "STAR") (maybe (token-rule "QUESTION")))
+    (and-rule (token-rule "PLUS") (maybe (token-rule "QUESTION")))))
+
+  (parser-rule
+   "lexerAtom"
+   (or-rule
+    (parser-subrule "characterRange")
+    (parser-subrule "terminal")
+    (parser-subrule "notSet")
+    (token-rule "LEXER_CHAR_SET")
+    (and-rule (token-rule "DOT") (maybe (parser-subrule "elementOptions")))))
+
+  (parser-rule
+   "atom"
+   (or-rule
+    (parser-subrule "terminal")
+    (parser-subrule "ruleref")
+    (parser-subrule "notSet")
+    (and-rule (token-rule "DOT") (maybe (parser-subrule "elementOptions")))))
+
+  (parser-rule
+   "notSet"
+   (or-rule
+    (and-rule (token-rule "NOT") (parser-subrule "setElement"))
+    (and-rule (token-rule "NOT") (parser-subrule "blockSet"))))
+
+  (parser-rule
+   "blockSet"
+   (and-rule
+    (token-rule "LPAREN")
+    (parser-subrule "setElement")
+    (repeat (and-rule (or-rule (token-rule "OR") (parser-subrule "setElement"))))
+    (token-rule "RPAREN")))
+
+  (parser-rule
+   "setElement"
+   (or-rule
+    (and-rule (token-rule "TOKEN_REF") (maybe (parser-subrule "elementOptions")))
+    (and-rule (token-rule "STRING_LITERAL") (maybe (parser-subrule "elementOptions")))
+    (parser-subrule "characterRange")
+    (token-rule "LEXER_CHAR_SET")))
+
+  (parser-rule
+   "block"
+   (and-rule (token-rule "LPAREN")
+	     (maybe (and-rule (maybe (parser-subrule "optionsSpec"))
+			      (repeat (parser-subrule "ruleAction"))
+			      (token-rule "COLON")))
+	     (parser-subrule "altList")
+	     (token-rule "RPAREN")))
+
+  (parser-rule
+   "ruleref"
+   (and-rule (token-rule "RULE_REF")
+	     (maybe (parser-subrule "argActionBlock"))
+	     (maybe (parser-subrule "elementOptions"))))
+
+  (parser-rule
+   "characterRange"
+   (and-rule (token-rule "STRING_LITERAL") (token-rule "RANGE") (token-rule "STRING_LITERAL")))
+
+  (parser-rule
+   "terminal"
+   (or-rule
+    (and-rule (token-rule "TOKEN_REF") (maybe (parser-subrule "elementOptions")))
+    (and-rule (token-rule "STRING_LITERAL") (maybe (parser-subrule "elementOptions")))))
+
+  (parser-rule
+   "elementOptions"
+   (and-rule (token-rule "LT")
+	     (parser-subrule "elementOption")
+	     (repeat (and-rule (token-rule "COMMA") (parser-subrule "elementOption")))
+	     (token-rule "GT")))
+
+  (parser-rule
+   "elementOption"
+   (or-rule
+    (parser-subrule "identifier")
+    (and-rule (parser-subrule "identifier")
+	      (token-rule "ASSIGN")
+	      (or-rule (parser-subrule "identifier") (token-rule "STRING_LITERAL")))))
+
+  (parser-rule "identifier" (or-rule (token-rule "RULE_REF") (token-rule "TOKEN_REF")))
+
+  ) ; end eval-when
+
+#|
 ;; Top level command for lexing the lexer
 (let* ((parser-text (slurp-file (asdf:system-relative-pathname
 				 'stantler
 				 "ANTLRv4Parser.g4")))
-       (tokens (lex parser-text *antlr-lexer* 0))
+       (tokens (lex *antlr-lexer* parser-text 0))
        (tokens* (remove-if (lambda (x) (not (eq :default x)))
 			   tokens
 			   :key 'channel))
        (tokens** (mapcar #'convert-id tokens*)))
   (defparameter *tokens* (apply #'vector tokens**)))
+
+(let ((root-node (parse-tree (parser-subrule "grammarSpec") *tokens* 0)))
+	    (node-walk *ast-transform* root-node))
+|#
 
