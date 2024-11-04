@@ -11,20 +11,12 @@ ANTLR4 Lexer / Parser
 Bootstrap Lexer / Parser
 |#
 
-(defun char-rule (char &optional (comparison 'char=))
-  "Matches one character."
-  (make-instance 'object-literal-rule :value char :comparison comparison))
-
-(defun string-rule (string &optional (comparison 'char=))
-  "Matches a string literal."
-  (make-instance 'array-literal-rule :value string :comparison comparison))
-
 (defun literal (literal)
-  (cond
-    ((characterp literal)
-     (char-rule literal))
-    ((stringp literal)
-     (string-rule literal))))
+  (ctypecase literal
+    (character
+     (make-instance 'object-literal-rule :value literal :comparison 'char=))
+    (string
+     (make-instance 'string-literal-rule :value literal))))
 
 (defun range (low high)
   (make-instance 'char-range-rule :low low :high high))

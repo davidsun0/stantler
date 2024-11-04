@@ -20,10 +20,6 @@
 (defclass object-literal-rule (literal-rule) ()
   (:documentation "Matches a single object literal."))
 
-;; TODO: replace with string-literal-rule
-(defclass array-literal-rule (literal-rule) ()
-  (:documentation "Matches an array of literals in sequence."))
-
 (defclass string-literal-rule ()
   ((value%
     :reader value
@@ -87,7 +83,7 @@
 
 (defclass lazy-rule ()
   ((stop%
-    :reader stop
+    :accessor stop
     :initarg :stop)))
 
 (defclass lazy-maybe-rule (lazy-rule child-mixin) ())
@@ -109,20 +105,12 @@ Rules that sucessfully match no items return 0."))
 	  1
 	  nil))))
 
-(defmethod match ((rule array-literal-rule) input start)
-  (with-no-eof-match
-    (loop for needle across (value rule)
-	  for offset from 0
-	  unless (funcall (comparison rule)
-			  needle
-			  (look-ahead input start offset))
-	    return nil
-	  finally (return (length (value rule))))))
-
 (defmethod match ((rule string-literal-rule) (input string) start)
-  (if (string= (value rule) input :start2 start)
-      (length (value rule))
-      nil))
+  (let ((end (+ start (length (value rule)))))
+    (if (and (< end (length input))
+	     (string= (value rule) input :start2 start :end2 end))
+	(length (value rule))
+	nil)))
 
 (defmethod match ((rule char-range-rule) input start)
   (with-no-eof-match

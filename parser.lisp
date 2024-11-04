@@ -7,6 +7,7 @@
     ;; TODO: remove after bootstrapping
     :initform (make-hash-table :size 16 :test 'equal))))
 
+;; TODO: rename to parser-node?
 (defclass parser-subrule ()
   ((name%
     :initarg :name

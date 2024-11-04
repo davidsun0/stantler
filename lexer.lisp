@@ -11,7 +11,12 @@
     :initform :default)
    (modes%
     :accessor modes
-    :initform nil)))
+    :initarg :modes
+    :initform nil)
+   (fragments%
+    :reader fragments
+    :initarg :fragments
+    :initform '())))
 
 ;;; Each lexer is composed of one or more lexer modes.
 ;;; Each mode contains a set of matcher rules; rules can switch the lexer's
@@ -21,8 +26,11 @@
   ((name%
     :reader name
     :initarg :name)
+   ;; Change to children-mixin?
    (rules%
-    :reader rules
+    :accessor rules
+    :initarg :rules
+    ;; TODO: cleanup after bootstrapping
     :initform (make-array 16 :adjustable t :fill-pointer 0))))
 
 (defmethod mode-rules ((lexer lexer) name)
@@ -32,6 +40,15 @@
 	(let ((new-mode (make-instance 'lexer-mode :name name)))
 	  (push new-mode (modes lexer))
 	  (rules new-mode)))))
+
+(defclass fragment (child-mixin)
+  ((name%
+    :reader name
+    :initarg :name)))
+
+(defmethod print-object ((fragment fragment) stream)
+  (print-unreadable-object (fragment stream :type t)
+    (format stream "~A" (name fragment))))
 
 (defclass lexer-rule (child-mixin)
   ((name%

@@ -4,6 +4,11 @@
   `(let ,(mapcar (lambda (name) `(,name (gensym ,(symbol-name name)))) names)
      ,@body))
 
+(defun filter (predicate sequence)
+  (loop for element in sequence
+	when (funcall predicate element)
+	  collect element))
+
 (defun nthcdr* (n list)
   "Like `nthcdr', but returns a list of the first n-1 elements as the second value."
   (loop for i upto n

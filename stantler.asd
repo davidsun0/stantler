@@ -10,4 +10,5 @@
    (:file "matcher-rules" :depends-on ("packages" "utils"))
    (:file "lexer" :depends-on ("matcher-rules"))
    (:file "parser" :depends-on ("matcher-rules"))
-   (:file "antlr" :depends-on ("lexer" "parser"))))
+   (:file "compiler" :depends-on ("lexer" "parser"))
+   (:file "antlr" :depends-on ("compiler"))))

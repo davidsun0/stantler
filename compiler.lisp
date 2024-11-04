@@ -33,10 +33,16 @@
   (node-walk *ast-transform* parse-node))
 
 (defun transform-and (children)
-  ;; TODO: set stop for lazy rules
-  (if (= 1 (length children))
-      (first children)
-      (make-instance 'and-rule :children children)))
+  (cond
+    ((= 1 (length children))
+     (first children))
+    (t
+     ;; Set stop rule for child lazy-repeat rules
+     (loop for child in children
+	   for i from 0
+	   when (typep child 'lazy-repeat-rule)
+	     do (setf (stop child) (nth (1+ i) children))
+	   finally (return (make-instance 'and-rule :children children))))))
 
 (defun transform-or (children)
   ;; TODO: filter for nil options
@@ -258,40 +264,45 @@
 
 ;; Terminal token rules
 
+(defun unescape-chars (string)
+  "Converts escaped characters in an ANTLR string into their realized forms.
+Returns a list of Lisp characters."
+  (loop
+    ;; Strip leading and trailing single / double quotes
+    with set = (subseq string 1 (1- (length string)))
+    with i = 0
+    while (< i (length set))
+    ;; TODO: Unicode escape sequences
+    when (char= #\\ (char set i))
+      collect (prog1 (case (char set (1+ i))
+		       ((#\b) #\Backspace)
+		       ((#\t) #\Tab)
+		       ((#\n) '+newline+)
+		       ((#\f) #\Page)
+		       ((#\r) '+return+)
+		       (otherwise (char set i)))
+		(incf i))
+    else
+      collect (char set i)
+    do (incf i)))
+
 (define-node-walker (*ast-transform* "STRING_LITERAL") (content)
-  ;; Strip leading and trailing single / double quote
-  (let ((literal (subseq content 1 (1- (length content)))))
-    (if (= 1 (length literal))
+  (let ((chars (unescape-chars content)))
+    (if (= 1 (length chars))
 	(make-instance 'object-literal-rule
-		       :value (character literal)
+		       :value (first chars)
 		       :comparison 'char=)
 	(make-instance 'string-literal-rule
-		       :value literal))))
+		       :value (coerce chars 'string)))))
 
 (define-node-walker (*ast-transform* "LEXER_CHAR_SET") (content)
-  (loop with set = (subseq content 1 (1- (length content)))
-	with i = 0
-	while (< i (length set))
-	when (char= #\\ (char set i))
-	  ;; TODO: Unicode escape sequences
-	  collect (case (char set (incf i))
-		    ((#\b) #\Backspace)
-		    ((#\t) #\Tab)
-		    ((#\n) +newline+)
-		    ((#\f) #\Page)
-		    ((#\r) +return+)
-		    (otherwise (char set i)))
-	    into chars
-	else
-	  collect (char set i) into chars
-	do (incf i)
-	finally
-	   (let ((children (mapcar (lambda (c)
-				     (make-instance 'object-literal-rule
-						    :value c
-						    :comparison 'char=))
-				   chars)))
-	     (return (make-instance 'or-rule :children children)))))
+  (let* ((chars (unescape-chars content))
+	 (children (mapcar (lambda (c)
+			     (make-instance 'object-literal-rule
+					    :value c
+					    :comparison 'char=))
+			   chars)))
+    (make-instance 'or-rule :children children)))
 
 (define-node-walker (*ast-transform* "characterRange") (low-string range high-string)
   (declare (ignore range))
@@ -307,12 +318,51 @@
     ;; TODO: fragment resolution
     (t
      (make-instance 'object-literal-rule
-		    :value (find-rule content *antlr-lexer*)
-		    :comparison 'eq
+		    :value content
+		    :comparison nil
 		    :key 'rule))))
 
 (define-node-walker (*ast-transform* "DOT") ()
   (make-instance 'wildcard-rule))
+
+;; Fragment and lexer subrule resolution
+
+(defmethod resolve-subrule (rule rule-list)
+  rule)
+
+(defmethod resolve-subrule ((rule child-mixin) rule-list)
+  (setf (child rule)
+	(resolve-subrule (child rule) rule-list))
+  rule)
+
+(defmethod resolve-subrule ((rule children-mixin) rule-list)
+  (loop for child in (children rule)
+	collect (resolve-subrule child rule-list) into c
+	finally (setf (children rule) c))
+  rule)
+
+(defmethod resolve-subrule ((rule object-literal-rule) rule-list)
+  (cond
+    ((null (comparison rule))
+     (let ((subrule (gethash (value rule) rule-list nil)))
+       (unless subrule
+	 (error "Reference to unknown rule ~A" (value rule)))
+       (child subrule)))
+    (t rule)))
+
+(defmethod resolve-subrule ((lexer lexer) rule-list)
+  (declare (ignore rule-list))
+  (let ((rule-list (make-hash-table :test 'equal)))
+    ;; Collect all rules and fragments
+    (loop for fragment in (fragments lexer)
+	  do (setf (gethash (name fragment) rule-list) fragment))
+    (loop for mode in (modes lexer)
+	  do (loop for rule across (rules mode)
+		   do (setf (gethash (name rule) rule-list) rule)))
+    ;; Resolve rule references
+    (loop for rule being the hash-values of rule-list
+	  do (resolve-subrule rule rule-list))
+    lexer))
 
 ;; Compile rule trees to Lisp ===================================================
 
@@ -331,18 +381,21 @@ produces a failure continuation form.
        ,(funcall success 1)
        ,(funcall failure nil)))
 
-(defmethod compile-match ((rule array-literal-rule) success failure start-form)
-  (cond
-    ((and (stringp (value rule)) (eq 'char= (comparison rule)))
-     ;; We do a little specialization
-     `(if (string= ,(value rule) input :start2 ,start-form)
-	  ,(funcall success (length (value rule)))
-	  ,(funcall failure nil)))
-    (t (error "Unimplemented"))))
+(defmethod compile-match ((rule string-literal-rule) success failure start-form)
+  `(if (string= ,(value rule) input
+		:start2 ,start-form
+		:end2 (+ ,start-form ,(length (value rule))))
+       ,(funcall success (length (value rule)))
+       ,(funcall failure nil)))
 
 (defmethod compile-match ((rule char-range-rule) success failure start-form)
   `(if (char<= ,(low rule) (look-ahead input ,start-form) ,(high rule))
        ,(funcall success 1)
+       ,(funcall failure nil)))
+
+(defmethod compile-match ((rule eof-rule) success failure start-form)
+  `(if (>= ,start-form (length input))
+       ,(funcall success 0)
        ,(funcall failure nil)))
 
 (defmethod compile-match ((rule wildcard-rule) success failure start-form)
@@ -350,6 +403,10 @@ produces a failure continuation form.
   `(if (look-ahead input ,start-form)
        ,(funcall success 1)
        ,(funcall failure nil)))
+
+(defmethod compile-match ((rule maybe-rule) success failure start-form)
+  (declare (ignore failure))
+  (compile-match (child rule) success (constantly 0) start-form))
 
 (defmethod compile-match ((rule not-rule) success failure start-form)
   (let ((subrule (compile-match (child rule) success failure start-form)))
@@ -437,3 +494,35 @@ produces a failure continuation form.
 	     (lambda (x) `(incf ,length ,x))
 	     failure
 	     start))))
+
+(defmethod compile-match ((rule one-or-more-rule) success failure start-form)
+  (with-gensyms (one-or-more-rule start length)
+    `(loop named ,one-or-more-rule
+	   with ,start = ,start-form
+	   with ,length = 0
+	   do ,(compile-match
+		(child rule)
+		(lambda (x) `(incf ,length ,x))
+		(constantly
+		 `(return-from ,one-or-more-rule
+		    (if ,length
+			,(funcall success length)
+			,(funcall failure nil))))
+		start))))
+
+;;; Lexer Compilation ===========================================================
+
+(defmethod compile-match ((rule lexer-rule) success failure start-form)
+  (declare (ignore success failure start-form))
+  `(defun ,(intern (name rule)) (input start)
+     ,(compile-match (child rule) 'identity 'identity 'start)))
+
+(defun compile-lexer (lexer path)
+  (with-open-file (file path :direction :output
+			     :element-type 'character
+			     :if-exists :supersede)
+    (loop for mode in (modes lexer)
+	  do (loop for rule across (rules mode)
+		   do (write (compile-match rule 'identity 'identity 'start) :stream file)
+		      (format file "~%~%")))))
+
