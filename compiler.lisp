@@ -280,6 +280,25 @@ Returns a list of Lisp characters."
 		       ((#\n) '+newline+)
 		       ((#\f) #\Page)
 		       ((#\r) '+return+)
+		       ((#\u)
+			;; Unicode code point:
+			;; Assumming the correct behavior is to parse as many
+			;; digits as possible (up to 4)
+			(loop with point = 0
+			      for j from 1 upto 4
+			      for digit = (let ((c (char set (+ 1 i j))))
+					    (cond
+					      ((char<= #\0 c #\9)
+					       (- (char-code c) (char-code #\0)))
+					      ((char<= #\a c #\f)
+					       (- (char-code c) 87))
+					      ((char<= #\A c #\F)
+					       (- (char-code c) 55))
+					      (t nil)))
+			      while digit
+			      do (setf point (+ (ash point 4) digit))
+			      finally (incf i j)
+				      (return (code-char point))))
 		       (otherwise (char set i)))
 		(incf i))
     else
@@ -306,9 +325,8 @@ Returns a list of Lisp characters."
 
 (define-node-walker (*ast-transform* "characterRange") (low-string range high-string)
   (declare (ignore range))
-  ;; Ignore leading and trailing quote characters
-  (let ((low (char (content low-string) 1))
-	(high (char (content high-string) 1)))
+  (let ((low  (first (unescape-chars (content low-string))))
+	(high (first (unescape-chars (content high-string)))))
     (make-instance 'char-range-rule :low low :high high)))
 
 (define-node-walker (*ast-transform* "TOKEN_REF") (content)
@@ -389,7 +407,10 @@ produces a failure continuation form.
        ,(funcall failure nil)))
 
 (defmethod compile-match ((rule char-range-rule) success failure start-form)
-  `(if (char<= ,(low rule) (look-ahead input ,start-form) ,(high rule))
+  `(if ,(if (and (< (char-code (low rule))  127)
+		 (< (char-code (high rule)) 127))
+	    `(char<= ,(low rule) (look-ahead input ,start-form) ,(high rule))
+	    `(<= ,(char-code (low rule)) (look-ahead input ,start-form) ,(char-code (high rule))))
        ,(funcall success 1)
        ,(funcall failure nil)))
 
