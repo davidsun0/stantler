@@ -14,9 +14,9 @@ Bootstrap Lexer / Parser
 (defun literal (literal)
   (ctypecase literal
     (character
-     (make-instance 'object-literal-rule :value literal :comparison 'char=))
+     (make-instance 'character-rule :value literal))
     (string
-     (make-instance 'string-literal-rule :value literal))))
+     (make-instance 'string-rule :value literal))))
 
 (defun range (low high)
   (make-instance 'char-range-rule :low low :high high))

@@ -308,20 +308,16 @@ Returns a list of Lisp characters."
 (define-node-walker (*ast-transform* "STRING_LITERAL") (content)
   (let ((chars (unescape-chars content)))
     (if (= 1 (length chars))
-	(make-instance 'object-literal-rule
-		       :value (first chars)
-		       :comparison 'char=)
-	(make-instance 'string-literal-rule
+	;; Should this optimization be moved into code generation?
+	(make-instance 'character-rule
+		       :value (first chars))
+	(make-instance 'string-rule
 		       :value (coerce chars 'string)))))
 
 (define-node-walker (*ast-transform* "LEXER_CHAR_SET") (content)
-  (let* ((chars (unescape-chars content))
-	 (children (mapcar (lambda (c)
-			     (make-instance 'object-literal-rule
-					    :value c
-					    :comparison 'char=))
-			   chars)))
-    (make-instance 'or-rule :children children)))
+  (make-instance 'or-rule
+		 :children (mapcar (lambda (c) (make-instance 'character-rule :value c))
+				   (unescape-chars content))))
 
 (define-node-walker (*ast-transform* "characterRange") (low-string range high-string)
   (declare (ignore range))
@@ -359,6 +355,37 @@ Returns a list of Lisp characters."
 	finally (setf (children rule) c))
   rule)
 
+(defmethod resolve-subrule :after ((rule or-rule) rule-list)
+  ;; For optimization, transform or-rule after subrules have been resolved:
+  (let ((children))
+    ;; Flatten nested or-rules
+    (loop for child in (children rule)
+	  nconcing (if (typep child 'or-rule)
+		       (children child)
+		       (list child))
+	    into children*
+	  finally (setf children children*))
+    ;; Collect groups of character literals and character ranges
+    (loop with char-group = '()
+	  with children* = '()
+	  for child in children
+	  when (or (typep child 'char-range-rule)
+		   (typep child 'character-rule))
+	    do (push child char-group)
+	  else
+	    do (progn
+		 (when char-group
+		   (push (make-instance 'or-rule :children (nreverse char-group))
+			 children*)
+		   (setf char-group '()))
+		 (push child children*))
+	  finally (when char-group
+		    (push (make-instance 'or-rule :children (nreverse char-group))
+			  children*)
+		    (setf char-group '()))
+		  (setf children (nreverse children*)))
+    (setf (children rule) children)))
+
 (defmethod resolve-subrule ((rule object-literal-rule) rule-list)
   (cond
     ((null (comparison rule))
@@ -394,12 +421,17 @@ Likewise, `failure` takes the place of the number of elements matched and
 produces a failure continuation form.
 `start-form` is the form which contains the index at which to begin matching."))
 
-(defmethod compile-match ((rule object-literal-rule) success failure start-form)
-  `(if (,(comparison rule) ,(value rule) (look-ahead input ,start-form))
+(defmethod compile-match ((rule character-rule) success failure start-form)
+  `(if ,(cond
+	  ;; Unicode syntax is not standardized across implementations
+	  ((< 127 (char-code (value rule)))
+	   `(= ,(char-code (value rule)) (look-ahead input ,start-form)))
+	  (t
+	   `(char= ,(value rule) (look-ahead input ,start-form))))
        ,(funcall success 1)
        ,(funcall failure nil)))
 
-(defmethod compile-match ((rule string-literal-rule) success failure start-form)
+(defmethod compile-match ((rule string-rule) success failure start-form)
   `(if (string= ,(value rule) input
 		:start2 ,start-form
 		:end2 (+ ,start-form ,(length (value rule))))
@@ -409,6 +441,7 @@ produces a failure continuation form.
 (defmethod compile-match ((rule char-range-rule) success failure start-form)
   `(if ,(if (and (< (char-code (low rule))  127)
 		 (< (char-code (high rule)) 127))
+	    ;; Unicode syntax is not standardized across implementations
 	    `(char<= ,(low rule) (look-ahead input ,start-form) ,(high rule))
 	    `(<= ,(char-code (low rule)) (look-ahead input ,start-form) ,(char-code (high rule))))
        ,(funcall success 1)
@@ -449,15 +482,31 @@ produces a failure continuation form.
 
 (defmethod compile-match ((rule or-rule) success failure start-form)
   (cond
-    ;; Optimization when matching a set of object literals
-    ((and (every (lambda (r) (typep r 'object-literal-rule)) (children rule))
-	  (let ((comparisons (mapcar 'comparison (children rule))))
-	    (every (lambda (c) (eq c (first comparisons))) comparisons)))
+    ((= 1 (length (children rule)))
+     (compile-match (first (children rule)) success failure start-form))
+    ;; Optimization when matching a set of character literals
+    ((every (lambda (r) (typep r 'character-rule)) (children rule))
      `(if (member (look-ahead input ,start-form)
 		  ',(mapcar 'value (children rule))
-		  :test ',(comparison (first (children rule))))
+		  :test 'char=)
 	  ,(funcall success 1)
 	  ,(funcall failure nil)))
+    ;; Matching a list of chars or char-ranges
+    ((every (lambda (r) (or (typep r 'char-range-rule)
+			    (typep r 'character-rule)))
+	    (children rule))
+     (with-gensyms (char-code)
+       `(if (let ((,char-code (char-code (look-ahead input ,start-form))))
+	      (or ,@(mapcar
+		     (lambda (r)
+		       (cond
+			 ((typep r 'char-range-rule)
+			  `(<= ,(char-code (low r)) ,char-code ,(char-code (high r))))
+			 (t
+			  `(= ,(char-code (value r)) ,char-code))))
+		     (children rule))))
+	    ,(funcall success 1)
+	    ,(funcall failure nil))))
     (t
      (with-gensyms (or-rule)
        `(block ,or-rule
@@ -545,5 +594,6 @@ produces a failure continuation form.
     (loop for mode in (modes lexer)
 	  do (loop for rule across (rules mode)
 		   do (write (compile-match rule 'identity 'identity 'start) :stream file)
-		      (format file "~%~%")))))
+		      (format file "~%~%"))))
+  lexer)
 

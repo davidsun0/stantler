@@ -20,10 +20,15 @@
 (defclass object-literal-rule (literal-rule) ()
   (:documentation "Matches a single object literal."))
 
-(defclass string-literal-rule ()
+(defclass string-rule ()
   ((value%
     :reader value
     :initarg :value)))
+
+(defclass character-rule ()
+  ((value%
+    :reader value
+    :initarg :value)
 
 (defclass char-range-rule ()
   ((low%
@@ -105,7 +110,7 @@ Rules that sucessfully match no items return 0."))
 	  1
 	  nil))))
 
-(defmethod match ((rule string-literal-rule) (input string) start)
+(defmethod match ((rule string-rule) (input string) start)
   (let ((end (+ start (length (value rule)))))
     (if (and (< end (length input))
 	     (string= (value rule) input :start2 start :end2 end))
