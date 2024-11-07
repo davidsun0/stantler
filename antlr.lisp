@@ -44,6 +44,14 @@ Bootstrap Lexer / Parser
    (apply 'make-instance 'lexer-rule :child rule :name name args)
    (mode-rules *antlr-lexer* mode)))
 
+(defmethod mode-rules ((lexer lexer) name)
+  (let ((mode (find name (modes lexer) :key 'name :test 'equal)))
+    (if mode
+	(rules mode)
+	(let ((new-mode (make-instance 'lexer-mode :name name)))
+	  (push new-mode (modes lexer))
+	  (rules new-mode)))))
+
 (let ((wildcard (make-instance 'wildcard-rule)))
   (setf *antlr-lexer* (make-instance 'lexer))
   (lexer-rule "DOC_COMMENT"

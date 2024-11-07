@@ -8,7 +8,7 @@
     :initarg :name)
    (mode%
     :accessor mode
-    :initform :default)
+    :initform (list :default))
    (modes%
     :accessor modes
     :initarg :modes
@@ -33,13 +33,9 @@
     ;; TODO: cleanup after bootstrapping
     :initform (make-array 16 :adjustable t :fill-pointer 0))))
 
-(defmethod mode-rules ((lexer lexer) name)
-  (let ((mode (find name (modes lexer) :key 'name :test 'equal)))
-    (if mode
-	(rules mode)
-	(let ((new-mode (make-instance 'lexer-mode :name name)))
-	  (push new-mode (modes lexer))
-	  (rules new-mode)))))
+(defmethod print-object ((mode lexer-mode) stream)
+  (print-unreadable-object (mode stream :type t :identity t)
+    (format stream "~A" (name mode))))
 
 (defclass fragment (child-mixin)
   ((name%
@@ -75,8 +71,16 @@
    (lexer-mode%
     :reader lexer-mode
     :initarg :lexer-mode
+    :initform nil)
+   (action%
+    :reader action
+    :initarg :action
     :initform nil))
   (:documentation "Top level lexer rule."))
+
+(defmethod print-object ((rule lexer-rule) stream)
+  (print-unreadable-object (rule stream :type t :identity t)
+    (format stream "~A" (name rule))))
 
 (defmethod match ((rule lexer-rule) input start)
   (match (child rule) input start))
@@ -117,7 +121,7 @@
 	do (loop with max-match = -1
 		 with best-rule = nil
 		 ;; Search for an applicable rule
-		 for r across (mode-rules lexer (mode lexer))
+		 for r across (rules (find (first (mode lexer)) (modes lexer) :key 'name))
 		 for m = (match r input rule-start)
 		 ;; When multiple rules match, return the longest match.
 		 ;; If there is a tie, the rule defined first wins.
@@ -126,6 +130,9 @@
 			    best-rule r)
 		 finally (when best-rule
 			   (setf match max-match rule best-rule)))
+	   ;; Lexer actions happen here?
+	   (when (and rule (action rule))
+	     (funcall (action rule) lexer))
 	   (cond
 	     ;; No match
 	     ((null match) (return nil))
@@ -146,7 +153,7 @@
 		    length match))
 	     ;; Successful match: exit the tagbody and produce a token.
 	     (t
-	      (setf (mode lexer) (or (lexer-mode rule) :default))
+	      (setf (first (mode lexer)) (or (lexer-mode rule) :default))
 	      (incf length match)
 	      (let ((contents (make-array length
 					  :element-type (array-element-type input)
@@ -159,6 +166,7 @@
 				       :content contents)))))))
 
 (defun lex (lexer input start)
+  (setf (mode lexer) (list :default))
   (loop for token = (next-token lexer input start)
 	when token
 	  collect token into tokens

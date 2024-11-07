@@ -28,7 +28,7 @@
 (defclass character-rule ()
   ((value%
     :reader value
-    :initarg :value)
+    :initarg :value)))
 
 (defclass char-range-rule ()
   ((low%
@@ -110,12 +110,19 @@ Rules that sucessfully match no items return 0."))
 	  1
 	  nil))))
 
+(defmethod match ((rule character-rule) (input string) start)
+  (with-no-eof-match
+    (if (char= (value rule) (look-ahead input start))
+	1
+	nil)))
+
 (defmethod match ((rule string-rule) (input string) start)
   (let ((end (+ start (length (value rule)))))
-    (if (and (< end (length input))
-	     (string= (value rule) input :start2 start :end2 end))
-	(length (value rule))
-	nil)))
+    (with-no-eof-match
+      (if (and (< end (length input))
+	       (string= (value rule) input :start2 start :end2 end))
+	  (length (value rule))
+	  nil))))
 
 (defmethod match ((rule char-range-rule) input start)
   (with-no-eof-match

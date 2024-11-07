@@ -9,15 +9,6 @@
 	when (funcall predicate element)
 	  collect element))
 
-(defun nthcdr* (n list)
-  "Like `nthcdr', but returns a list of the first n-1 elements as the second value."
-  (loop for i upto n
-	for head* = (car list*)
-	for list* = list then (cdr list*)
-	collect head* into head
-	;; Remove leading NIL from `head'.
-	finally (return (values list* (cdr head)))))
-
 (defclass children-mixin ()
   ((children%
     :accessor children
