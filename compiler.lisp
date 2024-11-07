@@ -33,22 +33,17 @@
   (node-walk *ast-transform* parse-node))
 
 (defun transform-and (children)
-  (cond
-    ((= 1 (length children))
-     (first children))
-    (t
-     ;; Set stop rule for child lazy-repeat rules
-     (loop for child in children
-	   for i from 0
-	   when (typep child 'lazy-repeat-rule)
-	     do (setf (stop child) (nth (1+ i) children))
-	   finally (return (make-instance 'and-rule :children children))))))
+  ;; Set stop rule for child lazy-repeat rules
+  (loop for child in children
+	for i from 0
+	when (typep child 'lazy-repeat-rule)
+	  do (setf (stop child) (nth (1+ i) children))
+	finally (return (if (= 1 (length children))
+			    (first children)
+			    (make-instance 'and-rule :children children)))))
 
 (defun transform-or (children)
-  ;; TODO: filter for nil options
-  (if (= 1 (length children))
-      (first children)
-      (make-instance 'or-rule :children children)))
+  (make-instance 'or-rule :children children))
 
 (define-node-walker (*ast-transform* "grammarSpec")
 		    (grammar-decl prequel-constructs rules mode-specs &optional eof)
@@ -277,9 +272,9 @@ Returns a list of Lisp characters."
       collect (prog1 (case (char set (1+ i))
 		       ((#\b) #\Backspace)
 		       ((#\t) #\Tab)
-		       ((#\n) '+newline+)
+		       ((#\n) +newline+)
 		       ((#\f) #\Page)
-		       ((#\r) '+return+)
+		       ((#\r) +return+)
 		       ((#\u)
 			;; Unicode code point:
 			;; Assumming the correct behavior is to parse as many
@@ -299,7 +294,7 @@ Returns a list of Lisp characters."
 			      do (setf point (+ (ash point 4) digit))
 			      finally (incf i j)
 				      (return (code-char point))))
-		       (otherwise (char set i)))
+		       (otherwise (char set (1+ i))))
 		(incf i))
     else
       collect (char set i)
@@ -315,9 +310,28 @@ Returns a list of Lisp characters."
 		       :value (coerce chars 'string)))))
 
 (define-node-walker (*ast-transform* "LEXER_CHAR_SET") (content)
-  (make-instance 'or-rule
-		 :children (mapcar (lambda (c) (make-instance 'character-rule :value c))
-				   (unescape-chars content))))
+  ;; The ANTLR implementation seems to compile a regex from the LEXER_CHAR_SET.
+  ;; This feels a little strange though as other places in the ANTLR grammar don't
+  ;; allow arbitrary regexes.
+  ;; It feels like overkill to bring in a regex library just for character groups,
+  ;; so this implements negation (^) and character ranges (-).
+  (loop with chars = (unescape-chars content)
+	with invert = nil
+	  initially (when (eql #\^ (first chars))
+		      (setf chars (rest chars))
+		      (setf invert t))
+	while chars
+	when (eql #\- (second chars))
+	  collect (make-instance 'char-range-rule :low (first chars) :high (third chars))
+	    into subrules
+	    and do (setf chars (cdddr chars))
+	else
+	  collect (make-instance 'character-rule :value (first chars)) into subrules
+	  and do (setf chars (cdr chars))
+	finally (let ((or-rule (make-instance 'or-rule :children subrules)))
+		  (return (if invert
+			      (make-instance 'not-rule :child or-rule)
+			      or-rule)))))
 
 (define-node-walker (*ast-transform* "characterRange") (low-string range high-string)
   (declare (ignore range))
@@ -424,7 +438,7 @@ produces a failure continuation form.
 (defmethod compile-match ((rule character-rule) success failure start-form)
   `(if ,(cond
 	  ;; Unicode syntax is not standardized across implementations
-	  ((< 127 (char-code (value rule)))
+	  ((> (char-code (value rule)) 127)
 	   `(= ,(char-code (value rule)) (look-ahead input ,start-form)))
 	  (t
 	   `(char= ,(value rule) (look-ahead input ,start-form))))
@@ -521,19 +535,23 @@ produces a failure continuation form.
 	  ,(funcall failure nil))))))
 
 (defmethod compile-match ((rule and-rule) success failure start-form)
-  (with-gensyms (and-rule start length)
-    `(block ,and-rule
-       (let ((,start ,start-form) (,length 0))
-	 ,@(mapcar (lambda (r)
-		     (compile-match
-		      r
-		      (lambda (x)
-			`(incf ,length ,x))
-		      (lambda (y)
-			`(return-from ,and-rule ,(funcall failure y)))
-		      `(+ ,start ,length)))
-		   (children rule))
-	 (return-from ,and-rule ,(funcall success length))))))
+  (cond
+    ((= 1 (length (children rule)))
+     (compile-match (first (children rule)) success failure start-form))
+    (t
+     (with-gensyms (and-rule start length)
+       `(block ,and-rule
+	  (let ((,start ,start-form) (,length 0))
+	    ,@(mapcar (lambda (r)
+			(compile-match
+			 r
+			 (lambda (x)
+			   `(incf ,length ,x))
+			 (lambda (y)
+			   `(return-from ,and-rule ,(funcall failure y)))
+			 `(+ ,start ,length)))
+		      (children rule))
+	    (return-from ,and-rule ,(funcall success length))))))))
 
 (defmethod compile-match ((rule repeat-rule) success failure start-form)
   (declare (ignore failure))
@@ -570,14 +588,15 @@ produces a failure continuation form.
     `(loop named ,one-or-more-rule
 	   with ,start = ,start-form
 	   with ,length = 0
+	     initially ,(compile-match
+			 (child rule)
+			 (lambda (x) `(incf ,length ,x))
+			 (lambda (y) `(return-from ,one-or-more-rule ,(funcall failure y)))
+			 start)
 	   do ,(compile-match
 		(child rule)
 		(lambda (x) `(incf ,length ,x))
-		(constantly
-		 `(return-from ,one-or-more-rule
-		    (if ,length
-			,(funcall success length)
-			,(funcall failure nil))))
+		(constantly `(return-from ,one-or-more-rule ,length))
 		start))))
 
 ;;; Lexer Compilation ===========================================================
