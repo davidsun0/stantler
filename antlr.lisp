@@ -621,7 +621,7 @@ Bootstrap Lexer / Parser
 ;; Top level command for lexing the lexer
 (let* ((parser-text (slurp-file (asdf:system-relative-pathname
 				 'stantler
-				 "ANTLRv4Parser.g4")))
+				 "StantlerLexer.g4")))
        (tokens (lex *antlr-lexer* parser-text 0))
        (tokens* (remove-if (lambda (x) (not (eq :default x)))
 			   tokens

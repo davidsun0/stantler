@@ -1,5 +1,38 @@
 (in-package #:stantler)
 
+(defun transform-and (children)
+  ;; Set stop rule for child lazy-repeat rules
+  (loop for child in children
+	for i from 0
+	when (typep child 'lazy-repeat-rule)
+	  do (setf (stop child) (nth (1+ i) children))
+	finally (return (if (= 1 (length children))
+			    (first children)
+			    (make-instance 'and-rule :children children)))))
+
+(defun transform-or (children)
+  (make-instance 'or-rule :children children))
+
+(defun apply-ebnf-suffix (rule suffix)
+  "Modifies a rule with an EBNF suffix (one of ?, *, +, ??, *?, +?)."
+  (cond
+    ((null suffix) rule)
+    ((string= suffix "?")
+     (make-instance 'maybe-rule :child rule))
+    ((string= suffix "*")
+     (make-instance 'repeat-rule :child rule))
+    ((string= suffix "+")
+     (make-instance 'one-or-more-rule :child rule))
+    ;; The context for the stop rule is not available at this level so NIL is
+    ;; used as a placeholder. The stop rule is calculated when constructing
+    ;; the parent and-rule.
+    ((string= suffix "??")
+     (make-instance 'lazy-maybe-rule :child rule :stop nil))
+    ((string= suffix "*?")
+     (make-instance 'lazy-repeat-rule :child rule :stop nil))
+    ((string= suffix "+?")
+     (make-instance 'lazy-one-or-more-rule :child rule :stop nil))))
+
 ;; Node Tree to Parser Rule Conversion ==========================================
 
 (defmacro define-node-walker ((function-table name) lambda-list &body body)
@@ -26,33 +59,19 @@
 	(funcall fn node)
 	(error "No node walk function defined for ~S" name))))
 
-(defparameter *ast-transform*
+(defvar *ast-transform*
   (make-hash-table :test 'equal))
 
 (defun ast-transform (parse-node)
   (node-walk *ast-transform* parse-node))
 
-(defun transform-and (children)
-  ;; Set stop rule for child lazy-repeat rules
-  (loop for child in children
-	for i from 0
-	when (typep child 'lazy-repeat-rule)
-	  do (setf (stop child) (nth (1+ i) children))
-	finally (return (if (= 1 (length children))
-			    (first children)
-			    (make-instance 'and-rule :children children)))))
-
-(defun transform-or (children)
-  (make-instance 'or-rule :children children))
-
 (define-node-walker (*ast-transform* "grammarSpec")
 		    (grammar-decl prequel-constructs rules mode-specs &optional eof)
   (declare (ignore grammar-decl prequel-constructs eof))
-  ;;(format t "~A~%~A~%~A~%~A~%" grammar-decl prequel-constructs rules mode-specs)
   (let* ((rules (ast-transform rules))
-	 (parser-rules      (filter (lambda (r) (typep r 'parser-subrule)) rules))
-	 (lexer-rules       (filter (lambda (r) (typep r 'lexer-rule))     rules))
-	 (default-fragments (filter (lambda (r) (typep r 'fragment))       rules))
+	 (parser-rules      (filter-type 'parser-subrule rules))
+	 (lexer-rules       (filter-type 'lexer-rule     rules))
+	 (default-fragments (filter-type 'fragment       rules))
 	 (default-mode (make-instance 'lexer-mode
 				      :rules (coerce lexer-rules 'vector)
 				      :name :default)))
@@ -80,7 +99,6 @@
 
 (define-node-walker (*ast-transform* "parserRuleSpec")
   (rule-modifiers rule-ref arg-action-block rule-returns throws-spec locals-spec rule-prequel colon rule-block semi exception-group)
-  (format t "~A~%" rule-ref)
   (node-walk *ast-transform* rule-block))
 
 (define-node-walker (*ast-transform* "lexerRuleSpec")
@@ -190,26 +208,6 @@
   ;; The only possible EBNF suffixes are ?, *, +, ??, *?, +?.
   (format nil "~A~A" (content modifier) (if question (content question) "")))
 
-(defun apply-ebnf-suffix (rule suffix)
-  "Modifies a rule with an EBNF suffix (one of ?, *, +, ??, *?, +?)."
-  (cond
-    ((null suffix) rule)
-    ((string= suffix "?")
-     (make-instance 'maybe-rule :child rule))
-    ((string= suffix "*")
-     (make-instance 'repeat-rule :child rule))
-    ((string= suffix "+")
-     (make-instance 'one-or-more-rule :child rule))
-    ;; The context for the stop rule is not available at this level so NIL is
-    ;; used as a placeholder. The stop rule is calculated when constructing
-    ;; the parent and-rule.
-    ((string= suffix "??")
-     (make-instance 'lazy-maybe-rule :child rule :stop nil))
-    ((string= suffix "*?")
-     (make-instance 'lazy-repeat-rule :child rule :stop nil))
-    ((string= suffix "+?")
-     (make-instance 'lazy-one-or-more-rule :child rule :stop nil))))
-
 ;; Trivial definitions
 
 (define-node-walker (*ast-transform* "rules") (&rest rule-specs)
@@ -234,28 +232,19 @@
 (define-node-walker (*ast-transform* "blockSuffix") (ebnf-suffix)
   (node-walk *ast-transform* ebnf-suffix))
 
-;; Alternatives
+(labels ((transform-alt-list (alternative alternatives)
+	   ;; alternatives has the grammar of (OR alternatives)*
+	   (let ((alts (cons alternative (mapcar 'second alternatives))))
+	     (transform-or (mapcar 'ast-transform alts)))))
 
-(defun transform-alt-list (alternative alternatives)
-  ;; alternatives has the grammar of (OR alternatives)*
-  ;; Ignore the OR tokens and collect all alternatives.
-  (let* ((alts (loop for (_ alt) in alternatives
-		     collect alt into alts
-		     finally (return (cons alternative alts))))
-	 (children (mapcar 'ast-transform alts)))
-    ;; Alternatives form an OR option
-    (if (= 1 (length children))
-	(first children)
-	(make-instance 'or-rule :children children))))
+  (define-node-walker (*ast-transform* "ruleAltList")  (alternative alternatives)
+    (transform-alt-list alternative alternatives))
 
-(define-node-walker (*ast-transform* "ruleAltList") (alternative alternatives)
-  (transform-alt-list alternative alternatives))
+  (define-node-walker (*ast-transform* "lexerAltList") (alternative alternatives)
+    (transform-alt-list alternative alternatives))
 
-(define-node-walker (*ast-transform* "lexerAltList") (alternative alternatives)
-  (transform-alt-list alternative alternatives))
-
-(define-node-walker (*ast-transform* "altList") (alternative alternatives)
-  (transform-alt-list alternative alternatives))
+  (define-node-walker (*ast-transform* "altList")      (alternative alternatives)
+    (transform-alt-list alternative alternatives)))
 
 ;; Terminal token rules
 
@@ -403,10 +392,14 @@ Returns a list of Lisp characters."
 (defmethod resolve-subrule ((rule object-literal-rule) rule-list)
   (cond
     ((null (comparison rule))
+     ;; Inline fragments
      (let ((subrule (gethash (value rule) rule-list nil)))
        (unless subrule
 	 (error "Reference to unknown rule ~A" (value rule)))
-       (child subrule)))
+       ;;(child subrule)
+       ;;subrule
+       (make-instance 'fragment-reference-rule :child (value rule))
+       ))
     (t rule)))
 
 (defmethod resolve-subrule ((lexer lexer) rule-list)
@@ -434,6 +427,13 @@ elements matched and produces a continuation form which will be evaluated if
 Likewise, `failure` takes the place of the number of elements matched and
 produces a failure continuation form.
 `start-form` is the form which contains the index at which to begin matching."))
+
+(defmethod compile-match ((rule fragment-reference-rule) success failure start-form)
+  (with-gensyms (fragment)
+  `(let ((,fragment (,(intern (child rule)) input ,start-form)))
+     (if ,fragment
+	 ,(funcall success fragment)
+	 ,(funcall failure nil)))))
 
 (defmethod compile-match ((rule character-rule) success failure start-form)
   `(if ,(cond
@@ -601,6 +601,11 @@ produces a failure continuation form.
 
 ;;; Lexer Compilation ===========================================================
 
+(defmethod compile-match ((rule fragment) success failure start-form)
+  (declare (ignore success failure start-form))
+  `(defun ,(intern (name rule)) (input start)
+     ,(compile-match (child rule) 'identity 'identity 'start)))
+
 (defmethod compile-match ((rule lexer-rule) success failure start-form)
   (declare (ignore success failure start-form))
   `(defun ,(intern (name rule)) (input start)
@@ -610,6 +615,9 @@ produces a failure continuation form.
   (with-open-file (file path :direction :output
 			     :element-type 'character
 			     :if-exists :supersede)
+    (loop for fragment in (fragments lexer)
+	  do (write (compile-match fragment 'identity 'identity 'start) :stream file)
+	     (format file "~%~%"))
     (loop for mode in (modes lexer)
 	  do (loop for rule across (rules mode)
 		   do (write (compile-match rule 'identity 'identity 'start) :stream file)

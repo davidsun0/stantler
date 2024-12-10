@@ -4,9 +4,9 @@
   `(let ,(mapcar (lambda (name) `(,name (gensym ,(symbol-name name)))) names)
      ,@body))
 
-(defun filter (predicate sequence)
+(defun filter-type (type sequence)
   (loop for element in sequence
-	when (funcall predicate element)
+	when (typep element type)
 	  collect element))
 
 (defclass children-mixin ()

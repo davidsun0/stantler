@@ -108,7 +108,7 @@
   (print-unreadable-object (token stream :type t :identity nil)
     ;; If the top-level rule's child is a literal, just print the name.
     ;; Otherwise, print the rule name and the matched content.
-    (if (typep (child (rule token)) 'literal-rule)
+    (if (typep (child (rule token)) 'object-literal-rule)
 	(format stream "~A" (name (rule token)))
 	(format stream "~A ~S" (name (rule token)) (content token)))))
 

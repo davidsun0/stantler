@@ -1,23 +1,19 @@
 (in-package #:stantler)
 
-(defclass rule () ())
-
 ;;; Literal Rules =====================================================
 
-;; TODO: split into char-rule and token-rule
-(defclass literal-rule ()
+(defclass object-literal-rule ()
   ((value%
     :reader value
     :initarg :value)
    (comparison%
     :reader comparison
+    :initform 'eq
     :initarg :comparison)
    (key%
     :reader key
     :initform 'identity
-    :initarg :key)))
-
-(defclass object-literal-rule (literal-rule) ()
+    :initarg :key))
   (:documentation "Matches a single object literal."))
 
 (defclass string-rule ()
@@ -43,6 +39,9 @@
 
 (defclass null-rule () ()
   (:documentation "Never matches. Useful as a placeholder."))
+
+(defclass fragment-reference-rule (child-mixin) ()
+  (:documentation "Placeholder for rule compilation."))
 
 (defclass wildcard-rule () ()
   (:documentation "Matches any one object."))
