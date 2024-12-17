@@ -67,22 +67,41 @@
 
 (define-node-walker (*ast-transform* "grammarSpec")
 		    (grammar-decl prequel-constructs rules mode-specs &optional eof)
-  (declare (ignore grammar-decl prequel-constructs eof))
-  (let* ((rules (ast-transform rules))
+  (declare (ignore prequel-constructs eof))
+  (let* (*lexer-name*
+	 (rules (ast-transform rules))
 	 (parser-rules      (filter-type 'parser-subrule rules))
 	 (lexer-rules       (filter-type 'lexer-rule     rules))
 	 (default-fragments (filter-type 'fragment       rules))
 	 (default-mode (make-instance 'lexer-mode
 				      :rules (coerce lexer-rules 'vector)
 				      :name :default)))
+    (declare (special *lexer-name*))
+    (ast-transform grammar-decl)
     (list
      (loop for (mode fragments) in (mapcar 'ast-transform mode-specs)
 	   collect mode into modes
 	   nconc fragments into fragment-list
 	   finally (return (make-instance 'lexer
+					  :name *lexer-name*
 					  :modes (list* default-mode modes)
 					  :fragments (nconc default-fragments fragment-list))))
      (make-instance 'parser :rules parser-rules))))
+
+(define-node-walker (*ast-transform* "grammarDecl") (type identifier semi)
+  (declare (special *lexer-name*) (ignore semi))
+  (let ((type-string (ast-transform type)))
+    (when (string= type-string "lexer grammar")
+      (setf *lexer-name* (value (ast-transform identifier))))
+    (when (string= type-string "parser grammar")
+      (error "Unimplemented"))
+    (when (string= type-string "grammar")
+      (error "Unimplemented"))))
+
+(define-node-walker (*ast-transform* "grammarType") (first &optional second)
+  ;; grammarType is one of "LEXER GRAMMAR", "PARSER GRAMMAR", or "GRAMMAR"
+  ;; grammarType is interpreted in grammarDecl
+  (format nil "~A~A~A" (content first) (if second " " "") (if second (content second) "")))
 
 (define-node-walker (*ast-transform* "modeSpec") (mode identifier semi lexer-rule-specs)
   (declare (ignore mode semi))
@@ -99,7 +118,7 @@
 
 (define-node-walker (*ast-transform* "parserRuleSpec")
   (rule-modifiers rule-ref arg-action-block rule-returns throws-spec locals-spec rule-prequel colon rule-block semi exception-group)
-  (node-walk *ast-transform* rule-block))
+  (ast-transform rule-block))
 
 (define-node-walker (*ast-transform* "lexerRuleSpec")
 		    (fragment token-ref options-spec colon lexer-rule-block semi)
@@ -107,15 +126,14 @@
   (let ((fragment-p fragment)
 	(name (content token-ref))
 	(options (if options-spec
-		     (node-walk *ast-transform* options-spec))))
+		     (ast-transform options-spec))))
     (make-instance (if fragment-p 'fragment 'lexer-rule)
 		   :name name
-		   :child (node-walk *ast-transform* lexer-rule-block))))
+		   :child (ast-transform lexer-rule-block))))
 
 (define-node-walker (*ast-transform* "labeledAlt") (alternative &optional identifier)
   ;; TODO: what does the identifier do?
-  (declare (ignore identifier))
-  (node-walk *ast-transform* alternative))
+  (ast-transform alternative))
 
 (define-node-walker (*ast-transform* "alternative") (&optional element-options elements)
   ;; TODO: element options
@@ -126,7 +144,7 @@
 (define-node-walker (*ast-transform* "lexerAlt") (&optional elements commands)
   ;; TODO: commands
   (if elements
-      (node-walk *ast-transform* elements)
+      (ast-transform elements)
       nil))
 
 (define-node-walker (*ast-transform* "element") (&rest values)
@@ -138,12 +156,12 @@
        ;; atom ebnfSuffix?
        (destructuring-bind (atom suffix) values
 	 (apply-ebnf-suffix
-	  (node-walk *ast-transform* atom)
+	  (ast-transform atom)
 	  (if suffix
-	      (node-walk *ast-transform* suffix)
+	      (ast-transform suffix)
 	      nil))))
       ((string= "ebnf" first-rule)
-       (node-walk *ast-transform* (first values)))
+       (ast-transform (first values)))
       ((string= "actionBlock" first-rule)
        ;; actionBlock has optional question
        (error "Unimplemented")))))
@@ -156,9 +174,9 @@
 	   (string= "lexerBlock" first-rule))
        (destructuring-bind (rule suffix) values
 	 (apply-ebnf-suffix
-	  (node-walk *ast-transform* rule)
+	  (ast-transform rule)
 	  (if suffix
-	      (node-walk *ast-transform* suffix)
+	      (ast-transform suffix)
 	      nil))))
       ((string= "actionBlock" first-rule)
        (destructuring-bind (action-block question) values
@@ -167,26 +185,26 @@
 (define-node-walker (*ast-transform* "lexerAtom") (atom &optional element-options)
   ;; TODO: DOT can have element-options
   (declare (ignore element-options))
-  (node-walk *ast-transform* atom))
+  (ast-transform atom))
 
 (define-node-walker (*ast-transform* "atom") (rule &optional element-options)
   ;; DOT can have element-options
   (declare (ignore element-options))
-  (node-walk *ast-transform* rule))
+  (ast-transform rule))
 
 (define-node-walker (*ast-transform* "setElement") (element &optional element-options)
   ;; TODO: TOKEN_REF and STRING_LITERAL can have elementOptions
   (declare (ignore element-options))
-  (node-walk *ast-transform* element))
+  (ast-transform element))
 
 (define-node-walker (*ast-transform* "notSet") (not element)
   (declare (ignore not))
-  (make-instance 'not-rule :child (node-walk *ast-transform* element)))
+  (make-instance 'not-rule :child (ast-transform element)))
 
 (define-node-walker (*ast-transform* "block") (lparen options alt-list rparen)
   (declare (ignore lparen options rparen))
   ;; TODO: options parsing
-  (node-walk *ast-transform* alt-list))
+  (ast-transform alt-list))
 
 (define-node-walker (*ast-transform* "ruleref") (rule-ref arg-action-block element-options)
   (declare (ignore arg-action-block element-options))
@@ -195,13 +213,13 @@
 (define-node-walker (*ast-transform* "terminal") (value element-options)
   (declare (ignore element-options))
   ;; TODO: all values can have element-options
-  (node-walk *ast-transform* value))
+  (ast-transform value))
 
 (define-node-walker (*ast-transform* "ebnf") (block block-suffix)
   (apply-ebnf-suffix
-   (node-walk *ast-transform* block)
+   (ast-transform block)
    (if block-suffix
-       (node-walk *ast-transform* block-suffix))))
+       (ast-transform block-suffix))))
 
 (define-node-walker (*ast-transform* "ebnfSuffix") (modifier question)
   ;; Modifier is one of ?, *, or +. Question is an optional ?.
@@ -217,20 +235,20 @@
   (transform-and (mapcar 'ast-transform elements)))
 
 (define-node-walker (*ast-transform* "ruleSpec") (rule)
-  (node-walk *ast-transform* rule))
+  (ast-transform rule))
 
 (define-node-walker (*ast-transform* "ruleBlock") (rule-alt-list)
-  (node-walk *ast-transform* rule-alt-list))
+  (ast-transform rule-alt-list))
 
 (define-node-walker (*ast-transform* "lexerRuleBlock") (lexer-alt-list)
-  (node-walk *ast-transform* lexer-alt-list))
+  (ast-transform lexer-alt-list))
 
 (define-node-walker (*ast-transform* "lexerBlock") (lparen lexer-alt-list rparen)
   (declare (ignore lparen rparen))
-  (node-walk *ast-transform* lexer-alt-list))
+  (ast-transform lexer-alt-list))
 
 (define-node-walker (*ast-transform* "blockSuffix") (ebnf-suffix)
-  (node-walk *ast-transform* ebnf-suffix))
+  (ast-transform ebnf-suffix))
 
 (labels ((transform-alt-list (alternative alternatives)
 	   ;; alternatives has the grammar of (OR alternatives)*
@@ -245,6 +263,9 @@
 
   (define-node-walker (*ast-transform* "altList")      (alternative alternatives)
     (transform-alt-list alternative alternatives)))
+
+(define-node-walker (*ast-transform* "identifier") (child)
+  (ast-transform child))
 
 ;; Terminal token rules
 
@@ -603,24 +624,46 @@ produces a failure continuation form.
 
 (defmethod compile-match ((rule fragment) success failure start-form)
   (declare (ignore success failure start-form))
-  `(defun ,(intern (name rule)) (input start)
-     ,(compile-match (child rule) 'identity 'identity 'start)))
+  (let ((*gensym-counter* 0))
+    `(defun ,(intern (name rule)) (input start)
+       ,(compile-match (child rule) 'identity 'identity 'start))))
 
 (defmethod compile-match ((rule lexer-rule) success failure start-form)
   (declare (ignore success failure start-form))
-  `(defun ,(intern (name rule)) (input start)
-     ,(compile-match (child rule) 'identity 'identity 'start)))
+  (let ((*gensym-counter* 0))
+    `(defun ,(intern (name rule)) (input start)
+       ,(compile-match (child rule) 'identity 'identity 'start))))
+
+(defmethod build-object ((rule lexer-rule))
+  `(make-instance 'lexer-rule
+		  :name ,(name rule)
+		  :child ',(intern (name rule))))
+
+(defmethod build-object ((mode lexer-mode))
+  `(make-instance 'lexer-mode
+		  :name ,(name mode)
+		  :rules ,(map 'vector 'build-object (rules mode))))
+
+(defmethod build-object ((lexer lexer))
+  `(eval-when (:compile-toplevel :load-toplevel :execute)
+     (make-instance 'lexer
+		    :name ,(name lexer)
+		    :modes ,(mapcar 'build-object (modes lexer)))))
 
 (defun compile-lexer (lexer path)
   (with-open-file (file path :direction :output
 			     :element-type 'character
 			     :if-exists :supersede)
-    (loop for fragment in (fragments lexer)
-	  do (write (compile-match fragment 'identity 'identity 'start) :stream file)
-	     (format file "~%~%"))
-    (loop for mode in (modes lexer)
-	  do (loop for rule across (rules mode)
-		   do (write (compile-match rule 'identity 'identity 'start) :stream file)
-		      (format file "~%~%"))))
+    (let ((*print-case* :downcase))
+      ;; Bare functions for fragments
+      (loop for fragment in (fragments lexer)
+	    do (pprint (compile-match fragment 'identity 'identity 'start) file)
+	       (format file "~%"))
+      ;; Bare functions for lexer rules
+      (loop for mode in (modes lexer)
+	    do (loop for rule across (rules mode)
+		     do (pprint (compile-match rule 'identity 'identity 'start) file)
+			(format file "~%")))
+      ;; Building lexer rules
+      (pprint (build-object lexer) file)))
   lexer)
-
