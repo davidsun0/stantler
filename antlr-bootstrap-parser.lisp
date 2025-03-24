@@ -13,9 +13,6 @@
 (defun parser-subrule (name)
   (make-instance 'parser-subrule :name name))
 
-(defun repeat (child)
-  (make-instance 'repeat-rule :child child))
-
 (eval-when (:load-toplevel :execute)
   (parser-rule
    "grammarSpec"

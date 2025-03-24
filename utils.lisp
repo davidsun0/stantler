@@ -21,11 +21,8 @@
 
 (defun slurp-file (path)
   "Reads a text file into string."
-  (with-open-file (stream path
-			  :direction :input
-			  :element-type 'character)
-    (let ((chars (make-array (file-length stream)
-			      :element-type 'character)))
+  (with-open-file (stream path :direction :input  :element-type 'character)
+    (let ((chars (make-array (file-length stream) :element-type 'character)))
       (read-sequence chars stream)
       chars)))
 

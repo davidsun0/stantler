@@ -11,4 +11,7 @@
    (:file "lexer" :depends-on ("matcher-rules"))
    (:file "parser" :depends-on ("matcher-rules"))
    (:file "compiler" :depends-on ("lexer" "parser"))
-   (:file "antlr" :depends-on ("compiler"))))
+
+   (:file "antlr-bootstrap" :depends-on ("compiler"))
+   (:file "antlr-bootstrap-lexer" :depends-on ("antlr-bootstrap"))
+   (:file "antlr" :depends-on ("antlr-bootstrap-lexer"))))
