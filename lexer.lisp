@@ -22,16 +22,10 @@
 ;;; Each mode contains a set of matcher rules; rules can switch the lexer's
 ;;; current mode.
 
-(defclass lexer-mode ()
+(defclass lexer-mode (children-mixin)
   ((name%
     :reader name
-    :initarg :name)
-   ;; Change to children-mixin?
-   (rules%
-    :accessor rules
-    :initarg :rules
-    ;; TODO: cleanup after bootstrapping
-    :initform (make-array 16 :adjustable t :fill-pointer 0))))
+    :initarg :name)))
 
 (defmethod print-object ((mode lexer-mode) stream)
   (print-unreadable-object (mode stream :type t :identity t)

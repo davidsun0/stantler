@@ -74,7 +74,7 @@
 	 (lexer-rules       (filter-type 'lexer-rule     rules))
 	 (default-fragments (filter-type 'fragment       rules))
 	 (default-mode (make-instance 'lexer-mode
-				      :rules (coerce lexer-rules 'vector)
+				      :children (coerce lexer-rules 'vector)
 				      :name :default)))
     (declare (special *lexer-name*))
     (ast-transform grammar-decl)
@@ -111,7 +111,7 @@
 	 (lexer-rules (remove-if (lambda (r) (typep r 'fragment)) rules)))
     (list
      (make-instance 'lexer-mode
-		    :rules (coerce lexer-rules 'vector)
+		    :children (coerce lexer-rules 'vector)
 		    :name (intern (string-upcase (content (first (children identifier))))
 				  (find-package "KEYWORD")))
      fragments)))
@@ -458,7 +458,7 @@ produces a failure continuation form.
 
 (defmethod compile-match ((rule character-rule) success failure start-form)
   `(if ,(cond
-	  ;; Unicode syntax is not standardized across implementations
+	  ;; Unicode syntax is not standardized across Lisp implementations
 	  ((> (char-code (value rule)) 127)
 	   `(= ,(char-code (value rule)) (look-ahead input ,start-form)))
 	  (t
@@ -642,27 +642,35 @@ produces a failure continuation form.
 (defmethod build-object ((mode lexer-mode))
   `(make-instance 'lexer-mode
 		  :name ,(name mode)
-		  :rules ,(map 'vector 'build-object (rules mode))))
+		  :children ,(map 'vector 'build-object (children mode))))
 
 (defmethod build-object ((lexer lexer))
   `(eval-when (:compile-toplevel :load-toplevel :execute)
+     ;; TODO: store in global var?
      (make-instance 'lexer
 		    :name ,(name lexer)
-		    :modes ,(mapcar 'build-object (modes lexer)))))
+		    :modes (list ,@(mapcar 'build-object (modes lexer))))))
 
 (defun compile-lexer (lexer path)
   (with-open-file (file path :direction :output
 			     :element-type 'character
 			     :if-exists :supersede)
-    (let ((*print-case* :downcase))
+    ;; TODO: package preamble
+    (let ((*print-case* :downcase)
+	  (all-rules (make-hash-table :test 'equal)))
+      (loop for fragment in (fragments lexer)
+	    do (setf (gethash (name fragment) all-rules) fragment))
+      (loop for mode in (modes lexer)
+	    do (loop for rule across (children mode)
+		     do (setf (gethash (name rule) all-rules) rule)))
       ;; Bare functions for fragments
       (loop for fragment in (fragments lexer)
-	    do (pprint (compile-match fragment 'identity 'identity 'start) file)
+	    do (pprint (compile-match (resolve-subrule fragment all-rules) 'identity 'identity 'start) file)
 	       (format file "~%"))
       ;; Bare functions for lexer rules
       (loop for mode in (modes lexer)
-	    do (loop for rule across (rules mode)
-		     do (pprint (compile-match rule 'identity 'identity 'start) file)
+	    do (loop for rule across (children mode)
+		     do (pprint (compile-match (resolve-subrule rule all-rules) 'identity 'identity 'start) file)
 			(format file "~%")))
       ;; Building lexer rules
       (pprint (build-object lexer) file)))
