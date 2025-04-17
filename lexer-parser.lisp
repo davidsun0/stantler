@@ -1,5 +1,102 @@
 (in-package #:stantler)
 
+;;; Literal Rules =====================================================
+
+(defclass object-literal-rule ()
+  ((value%
+    :reader value
+    :initarg :value)
+   (comparison%
+    :reader comparison
+    :initform 'eq
+    :initarg :comparison)
+   (key%
+    :reader key
+    :initform 'identity
+    :initarg :key))
+  (:documentation "Matches a single object literal."))
+
+(defclass string-rule ()
+  ((value%
+    :reader value
+    :initarg :value)))
+
+(defclass character-rule ()
+  ((value%
+    :reader value
+    :initarg :value)))
+
+(defclass char-range-rule ()
+  ((low%
+    :reader low
+    :initarg :low)
+   (high%
+    :reader high
+    :initarg :high))
+  (:documentation "Matches a character with char-code between low and high, inclusive."))
+
+;;; Special Rules =====================================================
+
+(defclass null-rule () ()
+  (:documentation "Never matches. Useful as a placeholder."))
+
+(defclass fragment-reference-rule (child-mixin) ()
+  (:documentation "Placeholder for rule compilation."))
+
+(defclass wildcard-rule () ()
+  (:documentation "Matches any one object."))
+
+;;; ANTLR has language actions, which allows for executing arbitrary code upon
+;;; lexing a pattern. Since this is Lisp, we use the built-in reader to parse Lisp
+;;; code.
+
+(defclass eof-rule () ())
+
+;; Does this need a rule? Are language actions actually lexed?
+
+(defclass lisp-form-rule ()
+  ((read-eval
+    :reader read-eval
+    :initarg :read-eval
+    :initform nil))
+  (:documentation "Matches one Lisp form."))
+
+;;; Compound Rules ====================================================
+
+(defclass or-rule (children-mixin) ()
+  (:documentation "Matches the first applicable child rule."))
+
+(defclass and-rule (children-mixin) ()
+  (:documentation "Matches if all children match consecutively, from left to right."))
+
+(defclass not-rule (child-mixin) ()
+  (:documentation "Matches if the child rule doesn't match."))
+
+(defclass maybe-rule (child-mixin) ()
+  (:documentation "Matches the child rule or nothing."))
+
+(defclass repeat-rule (child-mixin) ()
+  (:documentation "Matches the child multiple times."))
+
+;; The one-or-more-rule is not strictly necessary as it can be composed from by
+;; the pattern (a a*). However, it simplifies parse tree walkers as it removes
+;; some list manipulation.
+
+(defclass one-or-more-rule (child-mixin) ()
+  (:documentation "Matches the child rule one or more times."))
+
+(defclass lazy-rule ()
+  ((stop%
+    :accessor stop
+    :initarg :stop)))
+
+(defclass lazy-maybe-rule (lazy-rule child-mixin) ())
+
+(defclass lazy-repeat-rule (lazy-rule child-mixin) ()
+  (:documentation "Matches the child rule the fewest number of times before the stop rule matches."))
+
+(defclass lazy-one-or-more-rule (lazy-rule child-mixin) ())
+
 ;;;; Lexer =====================================================================
 
 (defclass lexer ()
@@ -26,6 +123,15 @@
   ((name%
     :reader name
     :initarg :name)))
+
+(defmethod make-instance :around ((class (eql 'lexer-mode)) &rest initargs)
+  (declare (ignore initargs))
+  (break)
+  (let ((obj (call-next-method)))
+    (setf (children obj)
+	  (make-array 8 :adjustable t :fill-pointer 0))
+    (format t "asdfasdfasdf~%~%~%")
+    obj))
 
 (defmethod print-object ((mode lexer-mode) stream)
   (print-unreadable-object (mode stream :type t :identity t)
@@ -115,7 +221,7 @@
 	do (loop with max-match = -1
 		 with best-rule = nil
 		 ;; Search for an applicable rule
-		 for r across (rules (find (first (mode lexer)) (modes lexer) :key 'name))
+		 for r across (children (find (first (mode lexer)) (modes lexer) :key 'name))
 		 for m = (match r input rule-start)
 		 ;; When multiple rules match, return the longest match.
 		 ;; If there is a tie, the rule defined first wins.
@@ -167,3 +273,31 @@
 	  and do (incf start (cdr (offset token)))
 	else
 	  return (values tokens start)))
+
+;;;; Parser ====================================================================
+
+(defclass parser ()
+  ((rules%
+    :reader rules
+    :initarg :rules
+    ;; TODO: remove after bootstrapping
+    :initform (make-hash-table :size 16 :test 'equal))))
+
+;; TODO: rename to parser-node?
+(defclass parser-subrule ()
+  ((name%
+    :initarg :name
+    :reader name)))
+
+(defmethod print-object ((parser-subrule parser-subrule) stream)
+  (print-unreadable-object (parser-subrule stream :type t :identity nil)
+    (princ (name parser-subrule) stream)))
+
+(defclass parse-node (children-mixin)
+  ((rule%
+    :accessor rule
+    :initarg :rule)))
+
+(defmethod print-object ((parse-node parse-node) stream)
+  (print-unreadable-object (parse-node stream :type t :identity t)
+    (princ (rule parse-node) stream)))

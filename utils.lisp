@@ -1,13 +1,12 @@
 (in-package #:stantler)
 
+;; TODO: switch to Alexandria's with-gensyms
 (defmacro with-gensyms (names &body body)
   `(let ,(mapcar (lambda (name) `(,name (gensym ,(symbol-name name)))) names)
      ,@body))
 
 (defun filter-type (type sequence)
-  (loop for element in sequence
-	when (typep element type)
-	  collect element))
+  (remove-if-not (lambda (x) (typep x type)) sequence))
 
 (defclass children-mixin ()
   ((children%
@@ -19,6 +18,7 @@
     :accessor child
     :initarg :child)))
 
+;; Can replace with alexandria:read-file-into-string
 (defun slurp-file (path)
   "Reads a text file into string."
   (with-open-file (stream path :direction :input  :element-type 'character)
@@ -57,8 +57,3 @@ Signals `eof-error' when reading past the end of the input.")
 	  (first input*)
 	  (error 'eof-error :index index)))))
 
-(defmacro with-no-eof-match (&body body)
-  "Evaluates body. If an `eof-error' is signaled, the error is captured and this form evaluates to NIL."
-  `(handler-case (progn ,@body)
-     (eof-error ()
-       nil)))

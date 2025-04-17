@@ -1,106 +1,15 @@
 (in-package #:stantler)
 
-;;; Literal Rules =====================================================
-
-(defclass object-literal-rule ()
-  ((value%
-    :reader value
-    :initarg :value)
-   (comparison%
-    :reader comparison
-    :initform 'eq
-    :initarg :comparison)
-   (key%
-    :reader key
-    :initform 'identity
-    :initarg :key))
-  (:documentation "Matches a single object literal."))
-
-(defclass string-rule ()
-  ((value%
-    :reader value
-    :initarg :value)))
-
-(defclass character-rule ()
-  ((value%
-    :reader value
-    :initarg :value)))
-
-(defclass char-range-rule ()
-  ((low%
-    :reader low
-    :initarg :low)
-   (high%
-    :reader high
-    :initarg :high))
-  (:documentation "Matches a character with char-code between low and high, inclusive."))
-
-;;; Special Rules =====================================================
-
-(defclass null-rule () ()
-  (:documentation "Never matches. Useful as a placeholder."))
-
-(defclass fragment-reference-rule (child-mixin) ()
-  (:documentation "Placeholder for rule compilation."))
-
-(defclass wildcard-rule () ()
-  (:documentation "Matches any one object."))
-
-;;; ANTLR has language actions, which allows for executing arbitrary code upon
-;;; lexing a pattern. Since this is Lisp, we use the built-in reader to parse Lisp
-;;; code.
-
-(defclass eof-rule () ())
-
-;; Does this need a rule? Are language actions actually lexed?
-
-(defclass lisp-form-rule ()
-  ((read-eval
-    :reader read-eval
-    :initarg :read-eval
-    :initform nil))
-  (:documentation "Matches one Lisp form."))
-
-;;; Compound Rules ====================================================
-
-(defclass or-rule (children-mixin) ()
-  (:documentation "Matches the first applicable child rule."))
-
-(defclass and-rule (children-mixin) ()
-  (:documentation "Matches if all children match consecutively, from left to right."))
-
-(defclass not-rule (child-mixin) ()
-  (:documentation "Matches if the child rule doesn't match."))
-
-(defclass maybe-rule (child-mixin) ()
-  (:documentation "Matches the child rule or nothing."))
-
-(defclass repeat-rule (child-mixin) ()
-  (:documentation "Matches the child multiple times."))
-
-;; The one-or-more-rule is not strictly necessary as it can be composed from by
-;; the pattern (a a*). However, it simplifies parse tree walkers as it removes
-;; some list manipulation.
-
-(defclass one-or-more-rule (child-mixin) ()
-  (:documentation "Matches the child rule one or more times."))
-
-(defclass lazy-rule ()
-  ((stop%
-    :accessor stop
-    :initarg :stop)))
-
-(defclass lazy-maybe-rule (lazy-rule child-mixin) ())
-
-(defclass lazy-repeat-rule (lazy-rule child-mixin) ()
-  (:documentation "Matches the child rule the fewest number of times before the stop rule matches."))
-
-(defclass lazy-one-or-more-rule (lazy-rule child-mixin) ())
-
 (defgeneric match (rule input start)
   (:documentation "Matches `rule` on `input` at index `start`.
 Returns the number of items matched or NIL if the rule fails to match.
 Rules that sucessfully match no items return 0."))
+
+(defmacro with-no-eof-match (&body body)
+  "Evaluates body. If an `eof-error' is signaled, the error is captured and this form evaluates to NIL."
+  `(handler-case (progn ,@body)
+     (eof-error ()
+       nil)))
 
 (defmethod match ((rule object-literal-rule) input start)
   (with-accessors ((comparison comparison) (value value) (key key)) rule
@@ -204,3 +113,63 @@ Rules that sucessfully match no items return 0."))
 	     (when count
 	       (incf total count)))))
 
+(defgeneric parse-tree (rule input start)
+  (:documentation "Matches parser rule `rule` on `input`, an array of tokens
+starting at index `start`."))
+
+(defmethod parse-tree ((rule object-literal-rule) input start)
+  (when (match rule input start)
+    (look-ahead input start)))
+
+(defmethod parse-tree ((and-rule and-rule) input start)
+  (loop with length = 0
+	for child in (children and-rule)
+	for count = (match child input (+ start length))
+	if count
+	  collect (parse-tree child input (+ start length)) into nodes
+	  and do (incf length count)
+	else
+	  return nil
+	finally (return nodes)))
+
+(defmethod parse-tree ((or-rule or-rule) input start)
+  (loop for child in (children or-rule)
+	for count = (match child input start)
+	when count
+	  return (parse-tree child input start)
+	finally (return nil)))
+
+(defmethod parse-tree ((rule parser-subrule) input start)
+  (let ((subrule (gethash (name rule) (rules *antlr-parser*))))
+    (when (match subrule input start)
+      (let ((children (parse-tree subrule input start)))
+	(unless (listp children)
+	  (setf children (list children)))
+	(make-instance 'parse-node
+		       :children children
+		       :rule rule)))))
+
+(defmethod parse-tree ((rule repeat-rule) input start)
+  (loop with length = 0
+	for count = (match (child rule) input (+ start length))
+	if count
+	  collect (parse-tree (child rule) input (+ start length))
+	    into results
+	  and do (incf length count)
+	else
+	  return results))
+
+(defmethod parse-tree ((rule one-or-more-rule) input start)
+  (loop with length = 0
+	for count = (match (child rule) input (+ start length))
+	if count
+	  collect (parse-tree (child rule) input (+ start length))
+	    into results
+	    and do (incf length count)
+	else
+	  return results))
+
+(defmethod parse-tree ((rule maybe-rule) input start)
+  (if (plusp (match rule input start))
+      (parse-tree (child rule) input start)
+      '()))
