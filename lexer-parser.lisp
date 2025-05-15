@@ -1,8 +1,27 @@
 (in-package #:stantler)
 
+(defclass rule ()
+  ((name%
+    :accessor name
+    :initarg :name
+    :initform nil)
+   (channel%
+    :accessor channel
+    :initarg :channel
+    :initform :default)
+   (skip-p%
+    :accessor skip-p
+    :initarg :skip-p
+    :initform nil)
+   (lexer-mode%
+    :reader lexer-mode
+    :initarg :lexer-mode
+    :initform nil)
+   ))
+
 ;;; Literal Rules =====================================================
 
-(defclass object-literal-rule ()
+(defclass object-literal-rule (rule)
   ((value%
     :reader value
     :initarg :value)
@@ -16,17 +35,17 @@
     :initarg :key))
   (:documentation "Matches a single object literal."))
 
-(defclass string-rule ()
+(defclass string-rule (rule)
   ((value%
     :reader value
     :initarg :value)))
 
-(defclass character-rule ()
+(defclass character-rule (rule)
   ((value%
     :reader value
     :initarg :value)))
 
-(defclass char-range-rule ()
+(defclass char-range-rule (rule)
   ((low%
     :reader low
     :initarg :low)
@@ -37,24 +56,24 @@
 
 ;;; Special Rules =====================================================
 
-(defclass null-rule () ()
+(defclass null-rule (rule) ()
   (:documentation "Never matches. Useful as a placeholder."))
 
-(defclass fragment-reference-rule (child-mixin) ()
+(defclass fragment-reference-rule (rule child-mixin) ()
   (:documentation "Placeholder for rule compilation."))
 
-(defclass wildcard-rule () ()
+(defclass wildcard-rule (rule) ()
   (:documentation "Matches any one object."))
 
 ;;; ANTLR has language actions, which allows for executing arbitrary code upon
 ;;; lexing a pattern. Since this is Lisp, we use the built-in reader to parse Lisp
 ;;; code.
 
-(defclass eof-rule () ())
+(defclass eof-rule (rule) ())
 
 ;; Does this need a rule? Are language actions actually lexed?
 
-(defclass lisp-form-rule ()
+(defclass lisp-form-rule (rule)
   ((read-eval
     :reader read-eval
     :initarg :read-eval
@@ -63,29 +82,29 @@
 
 ;;; Compound Rules ====================================================
 
-(defclass or-rule (children-mixin) ()
+(defclass or-rule (rule children-mixin) ()
   (:documentation "Matches the first applicable child rule."))
 
-(defclass and-rule (children-mixin) ()
+(defclass and-rule (rule children-mixin) ()
   (:documentation "Matches if all children match consecutively, from left to right."))
 
-(defclass not-rule (child-mixin) ()
+(defclass not-rule (rule child-mixin) ()
   (:documentation "Matches if the child rule doesn't match."))
 
-(defclass maybe-rule (child-mixin) ()
+(defclass maybe-rule (rule child-mixin) ()
   (:documentation "Matches the child rule or nothing."))
 
-(defclass repeat-rule (child-mixin) ()
+(defclass repeat-rule (rule child-mixin) ()
   (:documentation "Matches the child multiple times."))
 
 ;; The one-or-more-rule is not strictly necessary as it can be composed from by
 ;; the pattern (a a*). However, it simplifies parse tree walkers as it removes
 ;; some list manipulation.
 
-(defclass one-or-more-rule (child-mixin) ()
+(defclass one-or-more-rule (rule child-mixin) ()
   (:documentation "Matches the child rule one or more times."))
 
-(defclass lazy-rule ()
+(defclass lazy-rule (rule)
   ((stop%
     :accessor stop
     :initarg :stop)))
@@ -124,15 +143,6 @@
     :reader name
     :initarg :name)))
 
-(defmethod make-instance :around ((class (eql 'lexer-mode)) &rest initargs)
-  (declare (ignore initargs))
-  (break)
-  (let ((obj (call-next-method)))
-    (setf (children obj)
-	  (make-array 8 :adjustable t :fill-pointer 0))
-    (format t "asdfasdfasdf~%~%~%")
-    obj))
-
 (defmethod print-object ((mode lexer-mode) stream)
   (print-unreadable-object (mode stream :type t :identity t)
     (format stream "~A" (name mode))))
@@ -146,6 +156,8 @@
   (print-unreadable-object (fragment stream :type t)
     (format stream "~A" (name fragment))))
 
+#|
+;; TODO: remove and merge into rule
 (defclass lexer-rule (child-mixin)
   ((name%
     :reader name
@@ -184,6 +196,7 @@
 
 (defmethod match ((rule lexer-rule) input start)
   (match (child rule) input start))
+|#
 
 ;;; When a rule successfully matches, the text it matches produces a token.
 
@@ -208,7 +221,8 @@
   (print-unreadable-object (token stream :type t :identity nil)
     ;; If the top-level rule's child is a literal, just print the name.
     ;; Otherwise, print the rule name and the matched content.
-    (if (typep (child (rule token)) 'object-literal-rule)
+    (if (and (typep (rule token) 'child-mixin)
+	     (typep (child (rule token)) 'object-literal-rule))
 	(format stream "~A" (name (rule token)))
 	(format stream "~A ~S" (name (rule token)) (content token)))))
 
@@ -220,8 +234,9 @@
 	for rule = nil
 	do (loop with max-match = -1
 		 with best-rule = nil
-		 ;; Search for an applicable rule
-		 for r across (children (find (first (mode lexer)) (modes lexer) :key 'name))
+		 ;; Search for an applicable rule.
+		 ;; (mode lexer) is a stack of mode names - the car is the current mode.
+		 for r across (children (find (car (mode lexer)) (modes lexer) :key 'name))
 		 for m = (match r input rule-start)
 		 ;; When multiple rules match, return the longest match.
 		 ;; If there is a tie, the rule defined first wins.
@@ -231,8 +246,8 @@
 		 finally (when best-rule
 			   (setf match max-match rule best-rule)))
 	   ;; Lexer actions happen here?
-	   (when (and rule (action rule))
-	     (funcall (action rule) lexer))
+	   ;; (when (and rule (action rule))
+	   ;;  (funcall (action rule) lexer))
 	   (cond
 	     ;; No match
 	     ((null match) (return nil))
@@ -245,22 +260,24 @@
 	      (setf rule-start (+ rule-start match)
 		    token-start rule-start
 		    length 0))
+	     #|
 	     ((more-p rule)
 	      (break)
 	      ;; More: continue matching.
 	      ;; TODO: verify `more` semantics
 	      (setf rule-start (+ rule-start match)
-		    length match))
+	     length match))
+	     |#
 	     ;; Successful match: exit the tagbody and produce a token.
 	     (t
-	      (setf (first (mode lexer)) (or (lexer-mode rule) :default))
+	      (setf (car (mode lexer)) (or (lexer-mode rule) :default))
 	      (incf length match)
 	      (let ((contents (make-array length
 					  :element-type (array-element-type input)
 					  :displaced-index-offset token-start
 					  :displaced-to input)))
 		(return (make-instance 'token
-				       :rule    (or (token-type rule) rule)
+				       :rule    rule
 				       :channel (or (channel rule) :default)
 				       :offset  (cons token-start length)
 				       :content contents)))))))

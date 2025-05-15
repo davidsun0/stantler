@@ -68,35 +68,32 @@
 (define-node-walker (*ast-transform* "grammarSpec")
 		    (grammar-decl prequel-constructs rules mode-specs &optional eof)
   (declare (ignore prequel-constructs eof))
-  (let* (*lexer-name*
+  (let* ((grammar-name (ast-transform grammar-decl))
 	 (rules (ast-transform rules))
 	 (parser-rules      (filter-type 'parser-subrule rules))
-	 (lexer-rules       (filter-type 'lexer-rule     rules))
+	 (lexer-rules       (filter-type 'rule           rules))
 	 (default-fragments (filter-type 'fragment       rules))
 	 (default-mode (make-instance 'lexer-mode
 				      :children (coerce lexer-rules 'vector)
 				      :name :default)))
-    (declare (special *lexer-name*))
-    (ast-transform grammar-decl)
     (list
      (loop for (mode fragments) in (mapcar 'ast-transform mode-specs)
 	   collect mode into modes
 	   nconc fragments into fragment-list
 	   finally (return (make-instance 'lexer
-					  :name *lexer-name*
+					  :name grammar-name
 					  :modes (list* default-mode modes)
 					  :fragments (nconc default-fragments fragment-list))))
      (make-instance 'parser :rules parser-rules))))
 
 (define-node-walker (*ast-transform* "grammarDecl") (type identifier semi)
-  (declare (special *lexer-name*) (ignore semi))
+  (declare (ignore semi))
   (let ((type-string (ast-transform type)))
-    (when (string= type-string "lexer grammar")
-      (setf *lexer-name* (value (ast-transform identifier))))
-    (when (string= type-string "parser grammar")
-      (error "Unimplemented"))
-    (when (string= type-string "grammar")
-      (error "Unimplemented"))))
+    (if (or (string= type-string "lexer grammar")
+	    (string= type-string "parser grammar")
+	    (string= type-string "grammar"))
+	(value (ast-transform identifier))
+	(error "Invalid grammar declaration ~A" type-string))))
 
 (define-node-walker (*ast-transform* "grammarType") (first &optional second)
   ;; grammarType is one of "LEXER GRAMMAR", "PARSER GRAMMAR", or "GRAMMAR"
@@ -107,8 +104,8 @@
   (declare (ignore mode semi))
   ;; Only lexers have modeSpecs. Therefore all child rules are lexer rules.
   (let* ((rules (mapcar 'ast-transform lexer-rule-specs))
-	 (fragments (remove-if (lambda (r) (typep r 'lexer-rule)) rules))
-	 (lexer-rules (remove-if (lambda (r) (typep r 'fragment)) rules)))
+	 (fragments (filter-type 'fragment rules))
+	 (lexer-rules (filter-type 'rule rules)))
     (list
      (make-instance 'lexer-mode
 		    :children (coerce lexer-rules 'vector)
@@ -123,13 +120,18 @@
 (define-node-walker (*ast-transform* "lexerRuleSpec")
 		    (fragment token-ref options-spec colon lexer-rule-block semi)
   (declare (ignore colon semi))
-  (let ((fragment-p fragment)
-	(name (content token-ref))
+  (let ((name (content token-ref))
 	(options (if options-spec
-		     (ast-transform options-spec))))
-    (make-instance (if fragment-p 'fragment 'lexer-rule)
-		   :name name
-		   :child (ast-transform lexer-rule-block))))
+		     (ast-transform options-spec)))
+	(rule-block (ast-transform lexer-rule-block)))
+    (cond
+      (fragment
+       (make-instance 'fragment
+		      :name name
+		      :child rule-block))
+      (t
+       (setf (name rule-block) name)
+       rule-block))))
 
 (define-node-walker (*ast-transform* "labeledAlt") (alternative &optional identifier)
   ;; TODO: what does the identifier do?
@@ -143,9 +145,24 @@
 
 (define-node-walker (*ast-transform* "lexerAlt") (&optional elements commands)
   ;; TODO: commands
-  (if elements
-      (ast-transform elements)
-      nil))
+  (let ((lexer-commands (if commands (ast-transform commands)))
+	(lexer-elements (if elements (ast-transform elements))))
+    (loop for (name . expr) in lexer-commands
+	  do (cond
+	       ((string= name "skip")
+		(setf (skip-p lexer-elements) t))
+	       (t (error "Unimplemented lexer command ~A ~A" name expr))))
+    lexer-elements))
+
+(define-node-walker (*ast-transform* "lexerCommands") (rarrow command commands)
+  (declare (ignore rarrow))
+  (mapcar 'ast-transform (cons command (mapcar 'second commands))))
+
+(define-node-walker (*ast-transform* "lexerCommand") (name &optional lparen expr rparen)
+  (declare (ignore lparen rparen))
+  ;; Pass the name and expr back to lexerAlt
+  (cons (ast-transform (first (children name)))
+	(if expr (ast-transform (first (children expr))) nil)))
 
 (define-node-walker (*ast-transform* "element") (&rest values)
   ;; element has very different possible grammars
@@ -360,6 +377,10 @@ Returns a list of Lisp characters."
 		    :comparison nil
 		    :key 'rule))))
 
+(define-node-walker (*ast-transform* "RULE_REF") (content)
+  ;; TODO: is this right?
+  content)
+
 (define-node-walker (*ast-transform* "DOT") ()
   (make-instance 'wildcard-rule))
 
@@ -449,6 +470,18 @@ Likewise, `failure` takes the place of the number of elements matched and
 produces a failure continuation form.
 `start-form` is the form which contains the index at which to begin matching."))
 
+(defmethod compile-match :around (rule success failure start-form)
+  (call-next-method
+   rule
+   (cond
+     ((skip-p rule)
+      ;; The skip command is guaranteed to be in the tail position because it
+      ;; only occurs at the highest level of or-rule
+      (lambda (match) `(values ,(funcall success match) :skip)))
+     (t success))
+   failure
+   start-form))
+
 (defmethod compile-match ((rule fragment-reference-rule) success failure start-form)
   (with-gensyms (fragment)
   `(let ((,fragment (,(intern (child rule)) input ,start-form)))
@@ -466,13 +499,6 @@ produces a failure continuation form.
        ,(funcall success 1)
        ,(funcall failure nil)))
 
-(defmethod compile-match ((rule string-rule) success failure start-form)
-  `(if (string= ,(value rule) input
-		:start2 ,start-form
-		:end2 (+ ,start-form ,(length (value rule))))
-       ,(funcall success (length (value rule)))
-       ,(funcall failure nil)))
-
 (defmethod compile-match ((rule char-range-rule) success failure start-form)
   `(if ,(if (and (< (char-code (low rule))  127)
 		 (< (char-code (high rule)) 127))
@@ -480,6 +506,13 @@ produces a failure continuation form.
 	    `(char<= ,(low rule) (look-ahead input ,start-form) ,(high rule))
 	    `(<= ,(char-code (low rule)) (look-ahead input ,start-form) ,(char-code (high rule))))
        ,(funcall success 1)
+       ,(funcall failure nil)))
+
+(defmethod compile-match ((rule string-rule) success failure start-form)
+  `(if (string= ,(value rule) input
+		:start2 ,start-form
+		:end2 (+ ,start-form ,(length (value rule))))
+       ,(funcall success (length (value rule)))
        ,(funcall failure nil)))
 
 (defmethod compile-match ((rule eof-rule) success failure start-form)
@@ -618,24 +651,15 @@ produces a failure continuation form.
 		(child rule)
 		(lambda (x) `(incf ,length ,x))
 		(constantly `(return-from ,one-or-more-rule ,length))
-		start))))
+		start)
+	   finally ,(funcall success length))))
 
 ;;; Lexer Compilation ===========================================================
 
-(defmethod compile-match ((rule fragment) success failure start-form)
-  (declare (ignore success failure start-form))
-  (let ((*gensym-counter* 0))
-    `(defun ,(intern (name rule)) (input start)
-       ,(compile-match (child rule) 'identity 'identity 'start))))
+;; TODO: These don't need to be methods
 
-(defmethod compile-match ((rule lexer-rule) success failure start-form)
-  (declare (ignore success failure start-form))
-  (let ((*gensym-counter* 0))
-    `(defun ,(intern (name rule)) (input start)
-       ,(compile-match (child rule) 'identity 'identity 'start))))
-
-(defmethod build-object ((rule lexer-rule))
-  `(make-instance 'lexer-rule
+(defmethod build-object ((rule rule))
+  `(make-instance 'compiled-rule
 		  :name ,(name rule)
 		  :child ',(intern (name rule))))
 
@@ -651,6 +675,12 @@ produces a failure continuation form.
 		    :name ,(name lexer)
 		    :modes (list ,@(mapcar 'build-object (modes lexer))))))
 
+(defun compile-top-level-rule (rule)
+  (let ((*gensym-counter* 0))
+    `(defun ,(intern (name rule)) (input start)
+       ;; This is kind of ugly
+       ,(compile-match (if (typep rule 'fragment) (child rule) rule) 'identity 'identity 'start))))
+
 (defun compile-lexer (lexer path)
   (with-open-file (file path :direction :output
 			     :element-type 'character
@@ -665,12 +695,12 @@ produces a failure continuation form.
 		     do (setf (gethash (name rule) all-rules) rule)))
       ;; Bare functions for fragments
       (loop for fragment in (fragments lexer)
-	    do (pprint (compile-match (resolve-subrule fragment all-rules) 'identity 'identity 'start) file)
+	    do (pprint (compile-top-level-rule (resolve-subrule fragment all-rules)) file)
 	       (format file "~%"))
       ;; Bare functions for lexer rules
       (loop for mode in (modes lexer)
 	    do (loop for rule across (children mode)
-		     do (pprint (compile-match (resolve-subrule rule all-rules) 'identity 'identity 'start) file)
+		     do (pprint (compile-top-level-rule (resolve-subrule rule all-rules)) file)
 			(format file "~%")))
       ;; Building lexer rules
       (pprint (build-object lexer) file)))

@@ -56,10 +56,10 @@
 (defun maybe (child)
   (make-instance 'maybe-rule :child child))
 
-(defun lexer-rule (name rule &rest args &key (mode :default) &allow-other-keys)
-  (vector-push-extend
-   (apply 'make-instance 'lexer-rule :child rule :name name args)
-   (mode-rules *antlr-lexer* mode)))
+(defun lexer-rule (name rule &key channel (mode :default))
+  (setf (name rule) name)
+  (setf (channel rule) channel)
+  (vector-push-extend rule (mode-rules *antlr-lexer* mode)))
 
 (defun mode-rules (lexer name)
   (let ((mode (find name (modes lexer) :key 'name :test 'equal)))
@@ -612,20 +612,3 @@
   (parser-rule "identifier" (or-rule (token-rule "RULE_REF") (token-rule "TOKEN_REF")))
 
   ) ; end eval-when
-
-#|
-;; Top level command for lexing the lexer
-(let* ((parser-text (slurp-file (asdf:system-relative-pathname
-				 'stantler
-				 "StantlerLexer.g4")))
-       (tokens (lex *antlr-lexer* parser-text 0))
-       (tokens* (remove-if (lambda (x) (not (eq :default x)))
-			   tokens
-			   :key 'channel))
-       (tokens** (mapcar #'convert-id tokens*)))
-  (defparameter *tokens* (apply #'vector tokens**)))
-
-(let ((root-node (parse-tree (parser-subrule "grammarSpec") *tokens* 0)))
-	    (node-walk *ast-transform* root-node))
-|#
-
