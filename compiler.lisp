@@ -70,9 +70,9 @@
   (declare (ignore prequel-constructs eof))
   (let* ((grammar-name (ast-transform grammar-decl))
 	 (rules (ast-transform rules))
-	 (parser-rules      (filter-type 'parser-subrule rules))
-	 (lexer-rules       (filter-type 'rule           rules))
-	 (default-fragments (filter-type 'fragment       rules))
+	 (parser-rules      (filter-type 'parser-rule rules))
+	 (lexer-rules       (filter-type 'rule        rules))
+	 (default-fragments (filter-type 'fragment    rules))
 	 (default-mode (make-instance 'lexer-mode
 				      :children (coerce lexer-rules 'vector)
 				      :name :default)))
@@ -114,8 +114,11 @@
      fragments)))
 
 (define-node-walker (*ast-transform* "parserRuleSpec")
-  (rule-modifiers rule-ref arg-action-block rule-returns throws-spec locals-spec rule-prequel colon rule-block semi exception-group)
-  (ast-transform rule-block))
+		    (rule-modifiers rule-ref arg-action-block rule-returns throws-spec locals-spec rule-prequel colon rule-block semi exception-group)
+  (declare (ignore colon semi))
+  (make-instance 'parser-rule
+		 :name rule-ref
+		 :child (ast-transform rule-block)))
 
 (define-node-walker (*ast-transform* "lexerRuleSpec")
 		    (fragment token-ref options-spec colon lexer-rule-block semi)
@@ -337,8 +340,9 @@ Returns a list of Lisp characters."
 		       :value (coerce chars 'string)))))
 
 (define-node-walker (*ast-transform* "LEXER_CHAR_SET") (content)
-  ;; The ANTLR implementation seems to compile a regex from the LEXER_CHAR_SET.
-  ;; This feels a little strange though as other places in the ANTLR grammar don't
+  ;; The ANTLR implementation seems to compile a regex from the LEXER_CHAR_SET
+  ;; using the host implementation (Java).  This feels a little strange as
+  ;; otherwise ANTLR is defined from the ground up and the grammar grammar doesn't
   ;; allow arbitrary regexes.
   ;; It feels like overkill to bring in a regex library just for character groups,
   ;; so this implements negation (^) and character ranges (-).
@@ -370,11 +374,11 @@ Returns a list of Lisp characters."
   (cond
     ((string= "EOF" content)
      (make-instance 'eof-rule))
-    ;; TODO: fragment resolution
     (t
+     ;; Might want to intern token names and compare with eq
      (make-instance 'object-literal-rule
 		    :value content
-		    :comparison nil
+		    :comparison 'string=
 		    :key 'rule))))
 
 (define-node-walker (*ast-transform* "RULE_REF") (content)
@@ -460,6 +464,10 @@ Returns a list of Lisp characters."
 
 ;; Compile rule trees to Lisp ===================================================
 
+(defparameter *compiling-parser-p* nil
+  "Bind to true when compiling parser rules. Changes the behavior of
+`compile-match`.")
+
 (defgeneric compile-match (rule success failure start-form)
   (:documentation
    "Compiles `rule` into a Common Lisp form.
@@ -470,7 +478,7 @@ Likewise, `failure` takes the place of the number of elements matched and
 produces a failure continuation form.
 `start-form` is the form which contains the index at which to begin matching."))
 
-(defmethod compile-match :around (rule success failure start-form)
+(defmethod compile-match :around ((rule rule) success failure start-form)
   (call-next-method
    rule
    (cond
@@ -592,6 +600,18 @@ produces a failure continuation form.
   (cond
     ((= 1 (length (children rule)))
      (compile-match (first (children rule)) success failure start-form))
+    (*compiling-parser-p*
+     (with-gensyms (and-rule start matches)
+       `(block ,and-rule
+	  (let ((,start ,start-form) (,matches '()))
+	    ,@(mapcar (lambda (r)
+			(compile-match
+			 r
+			 (lambda (x) `(push ,x ,matches))
+			 (lambda (y) `(return-from ,and-rule ,(funcall failure y)))
+			 `(+ ,start (length ,matches))))
+		      (children rule))
+	    (return-from ,and-rule ,(funcall success matches))))))
     (t
      (with-gensyms (and-rule start length)
        `(block ,and-rule
@@ -675,33 +695,60 @@ produces a failure continuation form.
 		    :name ,(name lexer)
 		    :modes (list ,@(mapcar 'build-object (modes lexer))))))
 
-(defun compile-top-level-rule (rule)
+(defun compile-fragment (rule)
   (let ((*gensym-counter* 0))
     `(defun ,(intern (name rule)) (input start)
-       ;; This is kind of ugly
-       ,(compile-match (if (typep rule 'fragment) (child rule) rule) 'identity 'identity 'start))))
+       ,(compile-match (child rule) 'identity 'identity 'start))))
 
-(defun compile-lexer (lexer path)
-  (with-open-file (file path :direction :output
-			     :element-type 'character
-			     :if-exists :supersede)
-    ;; TODO: package preamble
-    (let ((*print-case* :downcase)
-	  (all-rules (make-hash-table :test 'equal)))
-      (loop for fragment in (fragments lexer)
-	    do (setf (gethash (name fragment) all-rules) fragment))
-      (loop for mode in (modes lexer)
-	    do (loop for rule across (children mode)
-		     do (setf (gethash (name rule) all-rules) rule)))
-      ;; Bare functions for fragments
-      (loop for fragment in (fragments lexer)
-	    do (pprint (compile-top-level-rule (resolve-subrule fragment all-rules)) file)
-	       (format file "~%"))
-      ;; Bare functions for lexer rules
-      (loop for mode in (modes lexer)
-	    do (loop for rule across (children mode)
-		     do (pprint (compile-top-level-rule (resolve-subrule rule all-rules)) file)
-			(format file "~%")))
-      ;; Building lexer rules
-      (pprint (build-object lexer) file)))
-  lexer)
+(defun compile-lexer-rule (rule)
+  (let ((*gensym-counter* 0))
+    `(defun ,(intern (name rule)) (input start)
+       ,(compile-match rule 'identity 'identity 'start))))
+
+(defun compile-lexer (lexer file)
+  ;; TODO: package preamble
+  (let ((*print-case* :downcase)
+	(all-rules (make-hash-table :test 'equal)))
+    (loop for fragment in (fragments lexer)
+	  do (setf (gethash (name fragment) all-rules) fragment))
+    (loop for mode in (modes lexer)
+	  do (loop for rule across (children mode)
+		   do (setf (gethash (name rule) all-rules) rule)))
+    ;; Bare functions for fragments
+    (loop for fragment in (fragments lexer)
+	  do (pprint (compile-fragment (resolve-subrule fragment all-rules)) file)
+	     (format file "~%"))
+    ;; Bare functions for lexer rules
+    (loop for mode in (modes lexer)
+	  do (loop for rule across (children mode)
+		   do (pprint (compile-lexer-rule (resolve-subrule rule all-rules)) file)
+		      (format file "~%")))
+    ;; Building lexer rules
+    (pprint (build-object lexer) file)))
+
+;;; Parser Compilation ==========================================================
+
+(defmethod compile-match ((rule parser-rule) success failure start)
+  (let ((*compiling-parser-p* t))
+    `(defun ,(intern (content (name rule))) (input start)
+       ,(compile-match (child rule) success failure 'start))))
+
+(defmethod compile-match ((rule parser-subrule) success failure start)
+  (with-gensyms (subrule)
+    `(let ((,subrule (,(intern (name rule)) input ,start)))
+       (if ,subrule
+	   ,(funcall success `(make-instance 'parse-node
+			  :children ,subrule
+			  :rule ',(intern (name rule))))
+	   ,(funcall failure nil)))))
+
+(defmethod compile-match ((rule object-literal-rule) success failure start)
+  `(if (,(comparison rule) (,(key rule) (look-ahead input ,start)) ,(value rule))
+       ,(funcall success `(look-ahead input ,start))
+       ,(funcall failure nil)))
+
+(defun compile-parser (parser file)
+  (loop for rule in (rules parser)
+	do (pprint (compile-match rule 'identity 'identity nil))
+	   (format t "~%")))
+	

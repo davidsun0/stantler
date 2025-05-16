@@ -156,48 +156,6 @@
   (print-unreadable-object (fragment stream :type t)
     (format stream "~A" (name fragment))))
 
-#|
-;; TODO: remove and merge into rule
-(defclass lexer-rule (child-mixin)
-  ((name%
-    :reader name
-    :initarg :name)
-   (skip-p%
-    :reader skip-p
-    :initarg :skip-p
-    :initform nil)
-   ;; True when a rule continues to consume input
-   (more-p%
-    :reader more-p
-    :initarg :more-p
-    :initform nil)
-   ;; Is token-type necessary? It references the rule that created the token (i.e. this object)
-   (token-type%
-    :reader token-type
-    :initarg :token-type
-    :initform nil)
-   (channel%
-    :reader channel
-    :initarg :channel
-    :initform :default)
-   (lexer-mode%
-    :reader lexer-mode
-    :initarg :lexer-mode
-    :initform nil)
-   (action%
-    :reader action
-    :initarg :action
-    :initform nil))
-  (:documentation "Top level lexer rule."))
-
-(defmethod print-object ((rule lexer-rule) stream)
-  (print-unreadable-object (rule stream :type t :identity t)
-    (format stream "~A" (name rule))))
-
-(defmethod match ((rule lexer-rule) input start)
-  (match (child rule) input start))
-|#
-
 ;;; When a rule successfully matches, the text it matches produces a token.
 
 (defclass token ()
@@ -300,7 +258,11 @@
     ;; TODO: remove after bootstrapping
     :initform (make-hash-table :size 16 :test 'equal))))
 
-;; TODO: rename to parser-node?
+(defclass parser-rule (child-mixin)
+  ((name%
+    :reader name
+    :initarg :name)))
+
 (defclass parser-subrule ()
   ((name%
     :initarg :name
